@@ -9,6 +9,7 @@ import chat.stoat.core.model.schemas.Profile
 import chat.stoat.discord.DiscordAPI
 import chat.stoat.discord.DiscordHttp
 import chat.stoat.discord.DiscordToStoat
+import chat.stoat.discord.routes.fetchUser
 import chat.stoat.core.model.schemas.Status
 import chat.stoat.core.model.schemas.User
 import io.ktor.client.request.get

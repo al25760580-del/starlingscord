@@ -6,6 +6,7 @@ import chat.stoat.api.StoatHttp
 import chat.stoat.api.StoatJson
 import chat.stoat.discord.DiscordAPI
 import chat.stoat.discord.DiscordHttp
+import chat.stoat.discord.routes.ackChannel
 import chat.stoat.api.api
 import chat.stoat.api.internals.ULID
 import chat.stoat.core.model.schemas.Channel
