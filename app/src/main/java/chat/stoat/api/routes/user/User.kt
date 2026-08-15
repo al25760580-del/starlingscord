@@ -9,8 +9,11 @@ import chat.stoat.api.api
 import chat.stoat.core.model.schemas.Profile
 import chat.stoat.discord.DiscordAPI
 import chat.stoat.discord.DiscordHttp
+import chat.stoat.discord.DiscordJson
 import chat.stoat.discord.DiscordToStoat
+import chat.stoat.discord.routes.fetchCurrentUser
 import chat.stoat.discord.routes.fetchUser
+import chat.stoat.discord.routes.patchCurrentUser
 import chat.stoat.core.model.schemas.Status
 import chat.stoat.core.model.schemas.User
 import chat.stoat.discord.realtime.DiscordGateway
