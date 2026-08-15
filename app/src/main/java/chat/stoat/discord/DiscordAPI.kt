@@ -5,10 +5,12 @@ import android.util.Base64
 import android.util.Log
 import androidx.compose.runtime.mutableStateMapOf
 import chat.stoat.BuildConfig
+import chat.stoat.api.StoatAPI
 import chat.stoat.core.discord.models.DiscordChannel
 import chat.stoat.core.discord.models.DiscordGuild
 import chat.stoat.core.discord.models.DiscordMessage
 import chat.stoat.core.discord.models.DiscordUser
+import chat.stoat.discord.DiscordToStoat
 import chat.stoat.discord.realtime.DiscordGateway
 import chat.stoat.discord.routes.fetchCurrentUser
 import io.ktor.client.HttpClient
@@ -106,6 +108,16 @@ object DiscordAPI {
     var selfId: String? = null
         internal set
 
+    /** When true, Discord is the active backend feeding [StoatAPI] (full_backend mode). */
+    var isActive = false
+
+    /**
+     * Maps a Revolt-shaped ULID (used as [chat.stoat.core.model.schemas.Message].id)
+     * back to the original Discord snowflake, so actions that need the real id
+     * (delete / edit / react) can be round-tripped.
+     */
+    val idMap = mutableMapOf<String, String>()
+
     private var socketJob: Job? = null
 
     val userCache = mutableStateMapOf<String, DiscordUser>()
@@ -127,8 +139,26 @@ object DiscordAPI {
     /** Completes login using an already-acquired token, then opens the gateway. */
     suspend fun loginAs(token: String) {
         setSessionToken(token)
+
+        // Reset any stale Revolt session state so Discord owns the UI caches.
+        StoatAPI.userCache.clear()
+        StoatAPI.serverCache.clear()
+        StoatAPI.channelCache.clear()
+        StoatAPI.messageCache.clear()
+        StoatAPI.emojiCache.clear()
+        StoatAPI.voiceStateCache.clear()
+        StoatAPI.userSlowmodeCache.clear()
+        StoatAPI.members.clear()
+        StoatAPI.selfId = null
+
         val self = DiscordHttp.fetchCurrentUser()
         selfId = self?.id
+        // Set synchronously so Stoat's chat screen (which treats a null selfId as
+        // "logged out") does not bounce back to the login route before the
+        // gateway READY event arrives.
+        StoatAPI.selfId = self?.id
+        self?.let { s -> s.id?.let { id -> StoatAPI.userCache[id] = DiscordToStoat.adaptUser(s) } }
+        isActive = true
         startSocketOps()
     }
 
@@ -146,10 +176,19 @@ object DiscordAPI {
         sessionId = ""
         selfId = null
         fingerprint = null
+        isActive = false
+        idMap.clear()
         userCache.clear()
         guildCache.clear()
         channelCache.clear()
         messageCache.clear()
         dmCache.clear()
+        // Clear the Stoat UI caches we populated so the UI returns to a clean state.
+        StoatAPI.userCache.clear()
+        StoatAPI.serverCache.clear()
+        StoatAPI.channelCache.clear()
+        StoatAPI.messageCache.clear()
+        StoatAPI.members.clear()
+        StoatAPI.selfId = null
     }
 }

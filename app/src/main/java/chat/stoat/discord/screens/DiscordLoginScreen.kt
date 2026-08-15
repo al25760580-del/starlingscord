@@ -98,7 +98,10 @@ fun DiscordLoginScreen(navController: NavController) {
                             when (result) {
                                 is DiscordLoginSuccess -> {
                                     DiscordAPI.loginAs(result.token)
-                                    navController.navigate("discord/home") {
+                                    // Use Stoat's existing chat UI (servers, channels,
+                                    // messages, profile, settings) instead of a
+                                    // parallel Discord screen.
+                                    navController.navigate("chat") {
                                         popUpTo("discord/login") { inclusive = true }
                                     }
                                 }

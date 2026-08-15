@@ -40,6 +40,9 @@ import chat.stoat.api.routes.microservices.autumn.MAX_ATTACHMENTS_PER_MESSAGE
 import chat.stoat.api.routes.microservices.autumn.uploadToAutumn
 import chat.stoat.api.routes.server.fetchMember
 import chat.stoat.api.routes.user.addUserIfUnknown
+import chat.stoat.discord.DiscordAPI
+import chat.stoat.discord.DiscordHttp
+import chat.stoat.discord.DiscordToStoat
 import chat.stoat.api.settings.GeoStateProvider
 import chat.stoat.callbacks.Action
 import chat.stoat.callbacks.ActionChannel
@@ -520,25 +523,27 @@ class ChannelScreenViewModel(
                 this@ChannelScreenViewModel.draftAttachments.take(MAX_ATTACHMENTS_PER_MESSAGE)
             val totalTaken = takenAttachments.size
 
-            takenAttachments.forEachIndexed { index, it ->
-                try {
-                    val id = uploadToAutumn(
-                        it.file,
-                        if (it.spoiler) "SPOILER_${it.filename}" else it.filename,
-                        "attachments",
-                        ContentType.parse(it.contentType),
-                        onProgress = { current, total ->
-                            attachmentUploadProgress =
-                                ((current.toFloat() / total.toFloat()) / totalTaken.toFloat()) + (index.toFloat() / totalTaken.toFloat())
-                        }
-                    )
-                    attachmentIds.add(id)
-                } catch (e: Exception) {
-                    Log.e("ChannelScreenViewModel", "Failed to upload attachment", e)
-                    attachmentUploadProgress = 0f
-                    isSending = false
-                    // TODO show error message
-                    return@launch
+            if (!DiscordAPI.isActive) {
+                takenAttachments.forEachIndexed { index, it ->
+                    try {
+                        val id = uploadToAutumn(
+                            it.file,
+                            if (it.spoiler) "SPOILER_${it.filename}" else it.filename,
+                            "attachments",
+                            ContentType.parse(it.contentType),
+                            onProgress = { current, total ->
+                                attachmentUploadProgress =
+                                    ((current.toFloat() / total.toFloat()) / totalTaken.toFloat()) + (index.toFloat() / totalTaken.toFloat())
+                            }
+                        )
+                        attachmentIds.add(id)
+                    } catch (e: Exception) {
+                        Log.e("ChannelScreenViewModel", "Failed to upload attachment", e)
+                        attachmentUploadProgress = 0f
+                        isSending = false
+                        // TODO show error message
+                        return@launch
+                    }
                 }
             }
 
@@ -575,14 +580,30 @@ class ChannelScreenViewModel(
             this@ChannelScreenViewModel.draftAttachments.removeAll(takenAttachments)
 
             try {
-                sendMessage(
-                    channelId = channel?.id ?: return@launch,
-                    content = content,
-                    nonce = nonce,
-                    replies = replyTo,
-                    attachments = attachmentIds,
-                    idempotencyKey = ULID.makeNext()
-                )
+                if (DiscordAPI.isActive) {
+                    // Discord text send: emit the adapted message straight into
+                    // Stoat's websocket frame channel so the existing
+                    // listenToWsEvents pipeline swaps the prospective message.
+                    val sent = DiscordHttp.sendMessage(
+                        channelId = channel?.id ?: return@launch,
+                        content = content,
+                    )
+                    val adapted =
+                        sent?.let { DiscordToStoat.adaptMessage(it) }?.copy(nonce = nonce)
+                    if (adapted != null) {
+                        adapted.id?.let { StoatAPI.messageCache[it] = adapted }
+                        StoatAPI.wsFrameChannel.tryEmit(adapted)
+                    }
+                } else {
+                    sendMessage(
+                        channelId = channel?.id ?: return@launch,
+                        content = content,
+                        nonce = nonce,
+                        replies = replyTo,
+                        attachments = attachmentIds,
+                        idempotencyKey = ULID.makeNext()
+                    )
+                }
             } catch (e: Exception) {
                 Log.e("ChannelScreenViewModel", "Failed to send message", e)
                 updateItems(
@@ -606,6 +627,10 @@ class ChannelScreenViewModel(
         nearby: String? = null,
         sort: String? = null,
     ): List<Message> {
+        if (DiscordAPI.isActive) {
+            return fetchDiscordMessages(channelId, amount, before, after)
+        }
+
         val response = fetchMessagesFromChannel(
             channelId = channelId,
             limit = amount,
@@ -632,6 +657,36 @@ class ChannelScreenViewModel(
             message.author?.let { addUserIfUnknown(it) }
             message.id?.let { StoatAPI.messageCache[it] = message }
         }
+        return messages
+    }
+
+    /**
+     * Discord-backed equivalent of [fetchMessagePage]. Pulls messages from the
+     * Discord REST API, adapts them into Revolt [Message] objects and stores them
+     * in [StoatAPI.messageCache]. [before]/[after] are Revolt ULIDs; they are
+     * translated back to Discord snowflakes via [DiscordAPI.idMap] for pagination.
+     */
+    private suspend fun fetchDiscordMessages(
+        channelId: String,
+        amount: Int,
+        before: String? = null,
+        after: String? = null,
+    ): List<Message> {
+        val beforeSnow = before?.let { DiscordAPI.idMap[it] }
+        val afterSnow = after?.let { DiscordAPI.idMap[it] }
+        val discordMessages = DiscordHttp.fetchChannelMessages(
+            channelId = channelId,
+            limit = amount,
+            before = beforeSnow,
+            after = afterSnow,
+        )
+        val messages = discordMessages.mapNotNull { DiscordToStoat.adaptMessage(it) }
+        discordMessages.forEach { dm ->
+            dm.author?.id?.let { aid ->
+                StoatAPI.userCache.putIfAbsent(aid, DiscordToStoat.adaptUser(dm.author) ?: return@let)
+            }
+        }
+        messages.forEach { m -> m.id?.let { StoatAPI.messageCache[it] = m } }
         return messages
     }
 

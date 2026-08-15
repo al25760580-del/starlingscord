@@ -37,9 +37,16 @@ suspend fun HttpClient.fetchDMs(): List<DiscordChannel> {
 suspend fun HttpClient.fetchChannelMessages(
     channelId: String,
     limit: Int = 50,
+    before: String? = null,
+    after: String? = null,
 ): List<DiscordMessage> {
     return try {
-        val response = get("$DISCORD_API/channels/$channelId/messages?limit=$limit")
+        val params = buildList {
+            add("limit=$limit")
+            before?.let { add("before=$it") }
+            after?.let { add("after=$it") }
+        }.joinToString("&")
+        val response = get("$DISCORD_API/channels/$channelId/messages?$params")
         DiscordJson.decodeFromString(
             ListSerializer(DiscordMessage.serializer()),
             response.bodyAsText(),

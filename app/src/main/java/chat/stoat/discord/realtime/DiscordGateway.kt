@@ -11,10 +11,12 @@ import chat.stoat.core.discord.models.GatewayReady
 import chat.stoat.core.discord.models.IdentifyData
 import chat.stoat.core.discord.models.IdentifyProperties
 import chat.stoat.core.discord.models.PresenceData
+import chat.stoat.api.StoatAPI
 import chat.stoat.discord.DISCORD_GATEWAY
 import chat.stoat.discord.DiscordHttp
 import chat.stoat.discord.DiscordJson
 import chat.stoat.discord.DiscordAPI
+import chat.stoat.discord.DiscordToStoat
 import io.ktor.client.plugins.websocket.ws
 import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
@@ -111,6 +113,9 @@ object DiscordGateway {
                 ready.user?.let { u -> u.id?.let { DiscordAPI.userCache[it] = u } }
                 ready.guilds?.forEach { g -> g.id?.let { DiscordAPI.guildCache[it] = g } }
                 ready.privateChannels?.forEach { c -> c.id?.let { DiscordAPI.dmCache[it] = c } }
+                // Feed Stoat's existing UI caches (servers, channels, users, self)
+                // so every screen renders Discord data.
+                DiscordToStoat.populateFromReady(ready)
                 Log.i("DiscordGateway", "READY received for user ${ready.user?.id}")
             }
 
@@ -152,6 +157,15 @@ object DiscordGateway {
                     payload.d!!,
                 )
                 message.id?.let { DiscordAPI.messageCache[it] = message }
+                // Adapt into a Revolt-shaped Message and push it through Stoat's
+                // existing websocket frame channel so ChannelScreenViewModel's
+                // listenToWsEvents renders it live, exactly like a Revolt message.
+                val adapted = DiscordToStoat.adaptMessage(message) ?: return@handleDispatch
+                message.author?.id?.let { aid ->
+                    StoatAPI.userCache.putIfAbsent(aid, DiscordToStoat.adaptUser(message.author) ?: return@let)
+                }
+                adapted.id?.let { StoatAPI.messageCache[it] = adapted }
+                StoatAPI.wsFrameChannel.tryEmit(adapted)
             }
 
             "MESSAGE_UPDATE" -> {
