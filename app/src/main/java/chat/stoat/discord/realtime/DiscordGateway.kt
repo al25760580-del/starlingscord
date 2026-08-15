@@ -29,7 +29,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.putJsonObject
 import android.util.Log
 
 /**
@@ -103,6 +108,29 @@ object DiscordGateway {
                 heartbeatJob?.cancel()
                 socket = null
                 DiscordAPI.connected = false
+                // Capture the close reason so we can see WHY Discord dropped the
+                // connection (e.g. 4004 auth failed, 4012 invalid api version).
+                // Ktor does not surface the close frame as a Frame.Close in the
+                // incoming stream, so we read it here instead.
+                try {
+                    val reason = closeReason.await()
+                    if (reason != null) {
+                        Log.w(
+                            "DiscordGateway",
+                            "Gateway closed by server: code=${reason.code}, message='${reason.message}'",
+                        )
+                        DiscordAPI.connectionError = "Gateway closed: ${reason.code} ${reason.message}"
+                    } else {
+                        Log.w("DiscordGateway", "Gateway closed (server provided no close reason)")
+                        DiscordAPI.connectionError = "Gateway connection closed"
+                    }
+                } catch (e: Exception) {
+                    Log.w(
+                        "DiscordGateway",
+                        "Gateway closed; could not read close reason: ${e.message}",
+                    )
+                    DiscordAPI.connectionError = "Gateway closed (${e.message})"
+                }
             }
         }
     }
@@ -203,18 +231,68 @@ object DiscordGateway {
     }
 
     private suspend fun WebSocketSession.sendIdentify(token: String) {
+        // Mirror the official user client's identify presence exactly: empty
+        // activity list, status "unknown", since 0. A non-standard presence (a
+        // custom-activity type:4, or status "online") can make Discord drop the
+        // connection immediately after HELLO.
         val identify = GatewayIdentify(
             d = IdentifyData(
                 token = token,
                 properties = IdentifyProperties(),
                 compress = false,
                 capabilities = 16381,
-                presence = PresenceData(),
+                presence = PresenceData(
+                    status = "unknown",
+                    since = 0,
+                    activities = emptyList(),
+                    afk = false,
+                ),
                 clientState = ClientState(),
             ),
         )
-        send(DiscordJson.encodeToString(GatewayIdentify.serializer(), identify))
-        Log.i("DiscordGateway", "Sent IDENTIFY")
+        val json = DiscordJson.encodeToString(GatewayIdentify.serializer(), identify)
+        Log.i("DiscordGateway", "Sent IDENTIFY: $json")
+        send(json)
+    }
+
+    /**
+     * Sends a gateway PRESENCE_UPDATE (opcode 3) to change the current user's
+     * activity status (online / idle / dnd / invisible) and optional custom
+     * status text. User-account status is gateway-driven, not a REST PATCH.
+     */
+    suspend fun updatePresence(discordStatus: String, customStatusText: String? = null) {
+        val socket = socket ?: run {
+            Log.w("DiscordGateway", "updatePresence: no active gateway socket")
+            return
+        }
+        val activitiesJson = if (customStatusText.isNullOrBlank()) {
+            JsonArray(emptyList())
+        } else {
+            buildJsonArray {
+                add(
+                    buildJsonObject {
+                        put("type", 4)
+                        put("state", customStatusText)
+                        put("name", "Custom Status")
+                    },
+                )
+            }
+        }
+        val payload = buildJsonObject {
+            put("op", 3)
+            putJsonObject("d") {
+                put("status", discordStatus)
+                put("since", 0)
+                put("activities", activitiesJson)
+                put("afk", false)
+            }
+        }
+        try {
+            socket.send(DiscordJson.encodeToString(JsonObject.serializer(), payload))
+            Log.i("DiscordGateway", "Sent PRESENCE_UPDATE status=$discordStatus")
+        } catch (e: Exception) {
+            Log.e("DiscordGateway", "Failed to send PRESENCE_UPDATE", e)
+        }
     }
 
     private suspend fun WebSocketSession.heartbeatLoop() {

@@ -26,9 +26,11 @@ suspend fun HttpClient.fetchGuilds(): List<DiscordGuild> {
 
 suspend fun HttpClient.fetchGuildChannels(guildId: String): List<DiscordChannel> {
     return try {
-        // User-account route. The bot route (/guilds/{id}/channels) returns 403
-        // for a user token, so we must go through /users/@me/guilds/{id}/channels.
-        val response = get("$DISCORD_API/users/@me/guilds/$guildId/channels")
+        // Logged-in user token: GET /guilds/{id}/channels returns the guild's
+        // channels. The /users/@me/guilds/{id}/channels path does NOT exist on
+        // Discord and returns 404 ("404: Not Found", code 0), so channels never
+        // came through this fallback.
+        val response = get("$DISCORD_API/guilds/$guildId/channels")
         val text = response.bodyAsText()
         if (response.status.value !in 200..299) {
             Log.w(

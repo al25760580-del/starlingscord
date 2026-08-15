@@ -1,5 +1,6 @@
 package chat.stoat.api.routes.user
 
+import android.util.Log
 import chat.stoat.api.StoatAPI
 import chat.stoat.api.StoatAPIError
 import chat.stoat.api.StoatHttp
@@ -12,6 +13,7 @@ import chat.stoat.discord.DiscordToStoat
 import chat.stoat.discord.routes.fetchUser
 import chat.stoat.core.model.schemas.Status
 import chat.stoat.core.model.schemas.User
+import chat.stoat.discord.realtime.DiscordGateway
 import io.ktor.client.request.get
 import io.ktor.client.request.patch
 import io.ktor.client.request.setBody
@@ -23,6 +25,7 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 
 suspend fun fetchSelf(): User {
     if (DiscordAPI.isActive) {
@@ -61,6 +64,11 @@ suspend fun patchSelf(
     remove: List<String>? = null,
     pure: Boolean = false
 ) {
+    if (DiscordAPI.isActive) {
+        // In Discord mode the Stoat API is unreachable, so route edits to Discord.
+        patchSelfDiscord(status, pronouns, avatar, background, bio, remove)
+        return
+    }
     val body = mutableMapOf<String, JsonElement>()
 
     if (status != null) {
@@ -126,6 +134,75 @@ suspend fun patchSelf(
 
     if (!pure) {
         StoatAPI.userCache[StoatAPI.selfId!!] = mergedUser
+    }
+}
+
+/**
+ * Discord-mode implementation of [patchSelf]. Routes profile edits to Discord's
+ * `PATCH /users/@me` and activity status to the gateway PRESENCE_UPDATE.
+ *
+ * Note: the Stoat profile UI uploads avatars/backgrounds to Autumn and passes an
+ * Autumn file id; Discord requires a base64 data-URI for `avatar`, so avatar and
+ * background edits are skipped (logged) unless a real data-URI is supplied.
+ */
+private suspend fun patchSelfDiscord(
+    status: Status?,
+    pronouns: String?,
+    avatar: String?,
+    background: String?,
+    bio: String?,
+    remove: List<String>?,
+) {
+    // Status (presence + custom status text) is gateway-driven for user accounts.
+    if (status != null) {
+        DiscordGateway.updatePresence(revoltPresenceToDiscord(status.presence), status.text)
+    }
+
+    val body = mutableMapOf<String, JsonElement>()
+    if (bio != null) {
+        body["bio"] = DiscordJson.encodeToJsonElement(String.serializer(), bio)
+    }
+    if (pronouns != null) {
+        body["pronouns"] = DiscordJson.encodeToJsonElement(String.serializer(), pronouns)
+    }
+    if (avatar != null) {
+        if (avatar.startsWith("data:")) {
+            body["avatar"] = DiscordJson.encodeToJsonElement(String.serializer(), avatar)
+        } else {
+            Log.w("User", "Discord avatar edit needs a data-URI; got Autumn id '$avatar' (skipped)")
+        }
+    }
+    if (remove != null && "Avatar" in remove) {
+        body["avatar"] = JsonPrimitive("null")
+    }
+    if (background != null || remove?.contains("ProfileBackground") == true) {
+        Log.w("User", "Discord user accounts have no profile background field; ignored")
+    }
+
+    if (body.isNotEmpty()) {
+        DiscordHttp.patchCurrentUser(
+            DiscordJson.encodeToString(
+                MapSerializer(String.serializer(), JsonElement.serializer()),
+                body,
+            ),
+        )
+    }
+
+    // Refresh the cached self user from Discord.
+    DiscordHttp.fetchCurrentUser()?.let { u ->
+        u.id?.let { StoatAPI.userCache[it] = DiscordToStoat.adaptUser(u) ?: return@let }
+    }
+}
+
+/** Maps a Revolt presence string (Online/Idle/Busy/Focus/Invisible) to Discord. */
+private fun revoltPresenceToDiscord(presence: String?): String {
+    return when (presence) {
+        "Online" -> "online"
+        "Idle" -> "idle"
+        "Busy" -> "dnd"
+        "Focus" -> "online"
+        "Invisible", "Offline" -> "invisible"
+        else -> "online"
     }
 }
 
