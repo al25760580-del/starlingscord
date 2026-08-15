@@ -93,8 +93,9 @@ jobs:
       - name: Build and run unit tests
         run: set -o pipefail; ./gradlew --no-daemon --stacktrace assembleDebug testDebugUnitTest 2>&1 | tee build.log
 
-      # On failure, publish the tail of the Gradle log as a public commit comment
-      # so the error is readable without repo admin rights.
+      # On failure, publish the Kotlin compiler errors (`e: ` lines) and the
+      # "What went wrong" summary as a public commit comment so the error is
+      # readable without repo admin rights.
       - name: Surface failure log
         if: failure()
         uses: actions/github-script@v7
@@ -103,12 +104,21 @@ jobs:
             const fs = require('fs');
             let log = 'build.log not found';
             try { log = fs.readFileSync('build.log', 'utf8'); } catch (e) {}
-            const tail = log.split('\n').slice(-180).join('\n');
+            const lines = log.split('\n');
+            const picks = lines.filter(l =>
+              /^e: /.test(l) ||
+              /What went wrong/.test(l) ||
+              /^> Task :.*FAILED/.test(l) ||
+              /Execution failed for task/.test(l)
+            );
+            let body = picks.join('\n');
+            if (!body.trim()) body = lines.slice(-150).join('\n');
+            if (body.length > 6000) body = body.slice(0, 6000);
             await github.rest.repos.createCommitComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               commit_sha: context.sha,
-              body: "### CI build failed\n\n```\n" + tail + "\n```"
+              body: "### CI build failed (Kotlin errors)\n\n```\n" + body + "\n```"
             });
 
       - name: Package test report
