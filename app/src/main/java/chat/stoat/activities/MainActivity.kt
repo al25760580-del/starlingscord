@@ -190,6 +190,11 @@ class MainActivityViewModel(
         viewModelScope.launch {
             Log.d("MainActivity", "Hydrating Experiments from KV")
             Experiments.hydrateWithKv()
+            // Discord owns its own infra; skip the Revolt health/geo probes.
+            if (kvStorage.get("auth_backend") == "discord" || DiscordAPI.isActive) {
+                Log.d("MainActivity", "Discord backend active; skipping Revolt health/geo probes")
+                return@launch
+            }
             Log.d("MainActivity", "Performing health check")
             doHealthCheck()
             Log.d("MainActivity", "Performing update geo state")
