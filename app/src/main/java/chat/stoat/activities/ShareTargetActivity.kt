@@ -54,6 +54,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import chat.stoat.R
 import chat.stoat.api.StoatAPI
+import chat.stoat.discord.DiscordAPI
 import chat.stoat.api.internals.ChannelUtils
 import chat.stoat.api.routes.channel.sendMessage
 import chat.stoat.api.routes.microservices.autumn.FileArgs
@@ -201,6 +202,14 @@ class ShareTargetScreenViewModel(
     }
 
     suspend fun initialiseAPI() {
+        if (DiscordAPI.isActive || kvStorage.get("auth_backend") == "discord") {
+            val discordToken = kvStorage.get("discord_session_token")
+            if (!discordToken.isNullOrBlank()) {
+                DiscordAPI.loginAs(discordToken)
+                apiIsReady = true
+                return
+            }
+        }
         if (!StoatAPI.isLoggedIn()) {
             val token = kvStorage.get("sessionToken") ?: return
             StoatAPI.loginAs(token)

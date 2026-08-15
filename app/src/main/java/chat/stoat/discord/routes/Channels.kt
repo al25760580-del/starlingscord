@@ -73,3 +73,8 @@ suspend fun HttpClient.sendMessage(channelId: String, content: String): DiscordM
 suspend fun sendDiscordMessage(channelId: String, content: String): DiscordMessage? {
     return DiscordHttp.sendMessage(channelId, content)
 }
+
+/** Discord read-state acknowledgement: POST /channels/{id}/messages/{id}/ack. */
+suspend fun HttpClient.ackChannel(channelId: String, messageId: String) {
+    post("$DISCORD_API/channels/$channelId/messages/$messageId/ack")
+}

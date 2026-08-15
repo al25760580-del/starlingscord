@@ -6,6 +6,9 @@ import chat.stoat.api.StoatHttp
 import chat.stoat.api.StoatJson
 import chat.stoat.api.api
 import chat.stoat.core.model.schemas.Profile
+import chat.stoat.discord.DiscordAPI
+import chat.stoat.discord.DiscordHttp
+import chat.stoat.discord.DiscordToStoat
 import chat.stoat.core.model.schemas.Status
 import chat.stoat.core.model.schemas.User
 import io.ktor.client.request.get
@@ -21,6 +24,11 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.JsonElement
 
 suspend fun fetchSelf(): User {
+    if (DiscordAPI.isActive) {
+        // Discord already populated StoatAPI.userCache[selfId] during loginAs.
+        return StoatAPI.userCache[StoatAPI.selfId]
+            ?: User.getPlaceholder(StoatAPI.selfId ?: "0")
+    }
     val response = StoatHttp.get("/users/@me".api())
         .bodyAsText()
 
@@ -121,6 +129,12 @@ suspend fun patchSelf(
 }
 
 suspend fun fetchUser(id: String): User {
+    if (DiscordAPI.isActive) {
+        val du = runCatching { DiscordHttp.fetchUser(id) }.getOrNull()
+        return DiscordToStoat.adaptUser(du)?.also { u ->
+            u.id?.let { StoatAPI.userCache[it] = u }
+        } ?: User.getPlaceholder(id)
+    }
     val res = StoatHttp.get("/users/$id".api())
 
     if (res.status.value == 404) {
@@ -156,6 +170,11 @@ suspend fun addUserIfUnknown(id: String) {
 }
 
 suspend fun fetchUserProfile(id: String): Profile {
+    if (DiscordAPI.isActive) {
+        // Discord has no separate profile endpoint; the user object carries bio/banner.
+        val du = runCatching { DiscordHttp.fetchUser(id) }.getOrNull()
+        return Profile(content = du?.bio, background = null)
+    }
     val res = StoatHttp.get("/users/$id/profile".api())
 
     val response = res.bodyAsText()

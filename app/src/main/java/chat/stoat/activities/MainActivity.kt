@@ -111,6 +111,7 @@ import chat.stoat.discord.screens.DiscordChannelScreen
 import chat.stoat.discord.screens.DiscordGuildScreen
 import chat.stoat.discord.screens.DiscordHomeScreen
 import chat.stoat.discord.screens.DiscordLoginScreen
+import chat.stoat.discord.DiscordAPI
 import chat.stoat.screens.login2.InitScreen
 import chat.stoat.screens.main.MainScreen
 import chat.stoat.screens.register.OnboardingScreen
@@ -214,6 +215,21 @@ class MainActivityViewModel(
             Log.d("MainActivity", "Checking if we can reach Stoat")
 
             if (!isConnected.value) return@launch startWithoutDestination()
+
+            // If a Discord session was persisted, boot straight into Discord (full_backend).
+            if (kvStorage.get("auth_backend") == "discord") {
+                val discordToken = kvStorage.get("discord_session_token")
+                if (!discordToken.isNullOrBlank()) {
+                    try {
+                        Log.d("MainActivity", "Discord session persisted; auto-logging in via Discord")
+                        DiscordAPI.loginAs(discordToken)
+                        startWithDestination("chat")
+                        return@launch
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "Discord auto-login failed; falling back to Revolt", e)
+                    }
+                }
+            }
 
             Log.d("MainActivity", "We can reach Stoat, checking if we're logged in")
 

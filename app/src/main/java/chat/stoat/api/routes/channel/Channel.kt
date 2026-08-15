@@ -4,6 +4,8 @@ import chat.stoat.api.StoatAPI
 import chat.stoat.api.StoatAPIError
 import chat.stoat.api.StoatHttp
 import chat.stoat.api.StoatJson
+import chat.stoat.discord.DiscordAPI
+import chat.stoat.discord.DiscordHttp
 import chat.stoat.api.api
 import chat.stoat.api.internals.ULID
 import chat.stoat.core.model.schemas.Channel
@@ -145,6 +147,11 @@ suspend fun deleteMessage(channelId: String, messageId: String) {
 }
 
 suspend fun ackChannel(channelId: String, messageId: String = ULID.makeNext()) {
+    if (DiscordAPI.isActive) {
+        // Discord read-state is managed over the gateway; acknowledge best-effort.
+        runCatching { DiscordHttp.ackChannel(channelId, messageId) }
+        return
+    }
     StoatHttp.put("/channels/$channelId/ack/$messageId".api())
 }
 

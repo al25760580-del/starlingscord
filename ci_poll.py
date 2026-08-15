@@ -1,7 +1,7 @@
 import json, time, urllib.request, sys
 
 REPO = "al25760580-del/starlingscord"
-SHA = "fc84627fe7e9e6f510ec6959864ab5da8940f2cf"
+SHA = "e6a39902b4d52f27270fdf106bdc5bd73bc65233"
 API = f"https://api.github.com/repos/{REPO}"
 
 

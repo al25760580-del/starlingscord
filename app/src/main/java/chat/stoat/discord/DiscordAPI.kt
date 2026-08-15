@@ -5,7 +5,9 @@ import android.util.Base64
 import android.util.Log
 import androidx.compose.runtime.mutableStateMapOf
 import chat.stoat.BuildConfig
+import chat.stoat.StoatApplication
 import chat.stoat.api.StoatAPI
+import chat.stoat.persistence.KVStorage
 import chat.stoat.core.discord.models.DiscordChannel
 import chat.stoat.core.discord.models.DiscordGuild
 import chat.stoat.core.discord.models.DiscordMessage
@@ -148,6 +150,10 @@ object DiscordAPI {
     suspend fun loginAs(token: String) {
         setSessionToken(token)
 
+        // Persist so a cold start can boot straight into Discord (full_backend mode).
+        runCatching { KVStorage(StoatApplication.instance).set("auth_backend", "discord") }
+        runCatching { KVStorage(StoatApplication.instance).set("discord_session_token", token) }
+
         // Reset any stale Revolt session state so Discord owns the UI caches.
         StoatAPI.userCache.clear()
         StoatAPI.serverCache.clear()
@@ -197,6 +203,9 @@ object DiscordAPI {
     fun logout() {
         socketJob?.cancel()
         socketJob = null
+        // Clear the persisted Discord session so a cold start does not retry Discord.
+        runCatching { KVStorage(StoatApplication.instance).remove("auth_backend") }
+        runCatching { KVStorage(StoatApplication.instance).remove("discord_session_token") }
         sessionToken = ""
         sessionId = ""
         selfId = null
