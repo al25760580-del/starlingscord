@@ -44,7 +44,6 @@ import chat.stoat.discord.DiscordAPI
 import chat.stoat.discord.DiscordHttp
 import chat.stoat.discord.DiscordToStoat
 import chat.stoat.discord.routes.fetchChannelMessages
-import chat.stoat.discord.routes.sendMessage as discordSendMessage
 import chat.stoat.api.settings.GeoStateProvider
 import chat.stoat.callbacks.Action
 import chat.stoat.callbacks.ActionChannel
@@ -586,7 +585,7 @@ class ChannelScreenViewModel(
                     // Discord text send: emit the adapted message straight into
                     // Stoat's websocket frame channel so the existing
                     // listenToWsEvents pipeline swaps the prospective message.
-                    val sent = discordSendMessage(
+                    val sent = chat.stoat.discord.routes.sendMessage(
                         DiscordHttp,
                         channelId = channel?.id ?: return@launch,
                         content = content,
