@@ -26,6 +26,7 @@ import io.ktor.client.request.header
 import io.ktor.client.request.url
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -111,6 +112,12 @@ object DiscordAPI {
 
     /** When true, Discord is the active backend feeding [StoatAPI] (full_backend mode). */
     var isActive = false
+
+    /** True once the gateway READY has been received and we are live. */
+    var connected = false
+
+    /** Last connection error, surfaced for diagnostics / UI. */
+    var connectionError: String? = null
 
     /**
      * Maps a Revolt-shaped ULID (used as [chat.stoat.core.model.schemas.Message].id)
