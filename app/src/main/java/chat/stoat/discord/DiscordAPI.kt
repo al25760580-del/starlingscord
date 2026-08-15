@@ -157,7 +157,7 @@ object DiscordAPI {
         // "logged out") does not bounce back to the login route before the
         // gateway READY event arrives.
         StoatAPI.selfId = self?.id
-        self?.let { s -> s.id?.let { id -> StoatAPI.userCache[id] = DiscordToStoat.adaptUser(s) } }
+        self?.let { s -> s.id?.let { id -> DiscordToStoat.adaptUser(s)?.let { u -> StoatAPI.userCache[id] = u } } }
         isActive = true
         startSocketOps()
     }

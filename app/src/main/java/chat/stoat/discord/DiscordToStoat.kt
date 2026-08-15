@@ -7,6 +7,7 @@ import chat.stoat.core.discord.models.DiscordChannelType
 import chat.stoat.core.discord.models.DiscordEmbed
 import chat.stoat.core.discord.models.DiscordGuild
 import chat.stoat.core.discord.models.DiscordMessage
+import chat.stoat.discord.routes.fetchGuildChannels
 import chat.stoat.core.discord.models.DiscordUser
 import chat.stoat.core.discord.models.GatewayReady
 import chat.stoat.core.model.schemas.AutumnResource
