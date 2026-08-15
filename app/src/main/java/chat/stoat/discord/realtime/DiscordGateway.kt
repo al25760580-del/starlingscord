@@ -11,6 +11,7 @@ import chat.stoat.core.discord.models.GatewayReady
 import chat.stoat.core.discord.models.IdentifyData
 import chat.stoat.core.discord.models.IdentifyProperties
 import chat.stoat.core.discord.models.PresenceData
+import chat.stoat.core.discord.models.ClientState
 import chat.stoat.api.StoatAPI
 import chat.stoat.discord.DISCORD_GATEWAY
 import chat.stoat.discord.DiscordHttp
@@ -55,11 +56,7 @@ object DiscordGateway {
             try {
                 for (frame in incoming) {
                     if (frame is Frame.Close) {
-                        val reason = runCatching { frame.readReason() }.getOrNull()
-                        Log.w(
-                            "DiscordGateway",
-                            "Gateway closed by server: code=${reason?.code}, message='${reason?.message}'",
-                        )
+                        Log.w("DiscordGateway", "Gateway closed by server (close frame received)")
                         break
                     }
                     if (frame !is Frame.Text) continue

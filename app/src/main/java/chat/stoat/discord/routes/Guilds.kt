@@ -28,20 +28,19 @@ suspend fun HttpClient.fetchGuildChannels(guildId: String): List<DiscordChannel>
     return try {
         // User-account route. The bot route (/guilds/{id}/channels) returns 403
         // for a user token, so we must go through /users/@me/guilds/{id}/channels.
-        val response = get("$DISCORD_API/users/@me/guilds/$guildId/channels") {
-            expectSuccess = false
-        }
+        val response = get("$DISCORD_API/users/@me/guilds/$guildId/channels")
+        val text = response.bodyAsText()
         if (response.status.value !in 200..299) {
             Log.w(
                 "DiscordRoutes",
                 "fetchGuildChannels($guildId) -> HTTP ${response.status.value}: " +
-                    response.bodyAsText().take(300),
+                    text.take(300),
             )
             return emptyList()
         }
         DiscordJson.decodeFromString(
             ListSerializer(DiscordChannel.serializer()),
-            response.bodyAsText(),
+            text,
         )
     } catch (e: Exception) {
         Log.w("DiscordRoutes", "fetchGuildChannels($guildId) failed", e)
