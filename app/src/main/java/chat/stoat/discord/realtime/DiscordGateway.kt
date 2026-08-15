@@ -248,7 +248,10 @@ object DiscordGateway {
                     activities = emptyList(),
                     afk = false,
                 ),
-                clientState = ClientState(),
+                clientState = ClientState(
+                    guildVersions = emptyMap(),
+                    apiCodeVersion = 0,
+                ),
             ),
         )
         val json = DiscordJson.encodeToString(GatewayIdentify.serializer(), identify)
