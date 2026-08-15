@@ -13,10 +13,10 @@ import chat.stoat.discord.realtime.DiscordGateway
 import chat.stoat.discord.routes.fetchCurrentUser
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
-import io.ktor.client.plugins.ContentNegotiation
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.DefaultRequest
 import io.ktor.client.plugins.HttpRequestRetry
-import io.ktor.client.plugins.WebSockets
+import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logging
@@ -99,12 +99,12 @@ object DiscordAPI {
     var sessionToken: String = ""
         private set
     var sessionId: String = ""
-        private set
+        internal set
     var fingerprint: String? = null
         private set
 
     var selfId: String? = null
-        private set
+        internal set
 
     private var socketJob: Job? = null
 

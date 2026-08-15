@@ -5,6 +5,7 @@ import chat.stoat.core.discord.models.DiscordMessage
 import chat.stoat.discord.DISCORD_API
 import chat.stoat.discord.DiscordHttp
 import chat.stoat.discord.DiscordJson
+import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
