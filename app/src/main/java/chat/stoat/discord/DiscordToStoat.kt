@@ -66,6 +66,19 @@ object DiscordToStoat {
         return ULID.makeSpecial(ts)
     }
 
+    /**
+     * Resolve a creation timestamp from an id that may be a Revolt ULID or a
+     * Discord snowflake. Returns null if the id is neither (e.g. blank). Used by
+     * Stoat UI that derives "joined/created" dates from [User.id].
+     */
+    fun idCreationTimestamp(id: String?): Long? {
+        if (id == null) return null
+        if (id.length == 26) {
+            return runCatching { ULID.asTimestamp(id) }.getOrNull()
+        }
+        return snowflakeTimestamp(id)
+    }
+
     fun adaptUser(u: DiscordUser?): User? {
         // Bind the cross-module nullable id to a local so it can be safely
         // smart-cast to non-null String (public API props in another module

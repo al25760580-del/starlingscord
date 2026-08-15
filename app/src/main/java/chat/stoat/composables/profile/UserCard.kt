@@ -56,6 +56,7 @@ import chat.stoat.R
 import chat.stoat.api.internals.ResourceLocations
 import chat.stoat.api.internals.ULID
 import chat.stoat.api.internals.UserQR
+import chat.stoat.discord.DiscordToStoat
 import chat.stoat.core.model.schemas.User
 import chat.stoat.composables.generic.UserAvatar
 import chat.stoat.ui.theme.FragmentMono
@@ -290,10 +291,8 @@ fun UserCard(
                 Text(
                     DateFormat.getDateInstance().format(
                         Date.from(
-                            Instant.ofEpochMilli(
-                                ULID.asTimestamp(
-                                    user?.id ?: "00000000000000000000000000"
-                                )
+                                Instant.ofEpochMilli(
+                                DiscordToStoat.idCreationTimestamp(user?.id) ?: 0L
                             )
                         )
                     ),
