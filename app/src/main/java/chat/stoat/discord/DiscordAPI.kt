@@ -29,6 +29,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 
@@ -159,13 +160,30 @@ object DiscordAPI {
         StoatAPI.selfId = self?.id
         self?.let { s -> s.id?.let { id -> DiscordToStoat.adaptUser(s)?.let { u -> StoatAPI.userCache[id] = u } } }
         isActive = true
+        // Seed servers / DMs / channels from REST immediately so the home screen
+        // is populated even before (or without) the gateway delivering READY.
+        DiscordToStoat.populateFromRest()
         startSocketOps()
     }
 
     private fun startSocketOps() {
         socketJob?.cancel()
         socketJob = CoroutineScope(Dispatchers.IO).launch {
-            DiscordGateway.connect(sessionToken)
+            var reconnectDelay = 1000L
+            while (isActive) {
+                try {
+                    DiscordGateway.connect(sessionToken)
+                    Log.i("DiscordAPI", "Gateway connection closed; reconnecting if still active")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    connectionError = e.message ?: e.javaClass.simpleName
+                    Log.e("DiscordAPI", "Gateway error: $connectionError", e)
+                }
+                if (!isActive) break
+                delay(reconnectDelay)
+                reconnectDelay = (reconnectDelay * 2).coerceAtMost(30_000)
+            }
         }
     }
 
@@ -177,6 +195,8 @@ object DiscordAPI {
         selfId = null
         fingerprint = null
         isActive = false
+        connected = false
+        connectionError = null
         idMap.clear()
         userCache.clear()
         guildCache.clear()

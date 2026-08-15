@@ -97,6 +97,7 @@ object DiscordGateway {
             } finally {
                 heartbeatJob?.cancel()
                 socket = null
+                DiscordAPI.connected = false
             }
         }
     }
@@ -116,6 +117,8 @@ object DiscordGateway {
                 // Feed Stoat's existing UI caches (servers, channels, users, self)
                 // so every screen renders Discord data.
                 DiscordToStoat.populateFromReady(ready)
+                DiscordAPI.connected = true
+                DiscordAPI.connectionError = null
                 Log.i("DiscordGateway", "READY received for user ${ready.user?.id}")
             }
 
@@ -124,7 +127,19 @@ object DiscordGateway {
                     DiscordGuild.serializer(),
                     payload.d!!,
                 )
-                guild.id?.let { DiscordAPI.guildCache[it] = guild }
+                guild.id?.let { gid ->
+                    DiscordAPI.guildCache[gid] = guild
+                    // The full guild object carries channels, description and
+                    // banner -- none of which are present on the reduced guild
+                    // shapes from READY or /users/@me/guilds.
+                    val channelIds = guild.channels?.mapNotNull { it.id } ?: emptyList()
+                    guild.channels?.forEach { ch ->
+                        ch.id?.let { cid ->
+                            StoatAPI.channelCache[cid] = DiscordToStoat.adaptChannel(ch)
+                        }
+                    }
+                    StoatAPI.serverCache[gid] = DiscordToStoat.adaptServer(guild, channelIds)
+                }
             }
 
             "GUILD_DELETE" -> {

@@ -81,6 +81,7 @@ import chat.stoat.api.settings.SyncedSettings
 import chat.stoat.callbacks.Action
 import chat.stoat.callbacks.ActionChannel
 import chat.stoat.composables.chat.DisconnectedNotice
+import chat.stoat.discord.DiscordAPI
 import chat.stoat.composables.screens.chat.drawer.ChannelSideDrawer
 import chat.stoat.core.model.schemas.ReleaseNotesSettings
 import chat.stoat.dialogs.NotificationRationaleDialog
@@ -897,7 +898,7 @@ fun ChatRouterScreen(
             )
     ) {
         AnimatedVisibility(
-            visible = RealtimeSocket.disconnectionState != DisconnectionState.Connected
+            visible = RealtimeSocket.disconnectionState != DisconnectionState.Connected && !DiscordAPI.isActive
         ) {
             DisconnectedNotice(
                 state = RealtimeSocket.disconnectionState,
@@ -909,7 +910,7 @@ fun ChatRouterScreen(
         }
 
         CompositionLocalProvider(
-            LocalIsConnected provides (RealtimeSocket.disconnectionState == DisconnectionState.Connected)
+            LocalIsConnected provides (RealtimeSocket.disconnectionState == DisconnectionState.Connected || DiscordAPI.isActive)
         ) {
             if (useTabletAwareUI) {
                 Row {

@@ -7,7 +7,10 @@ import chat.stoat.core.discord.models.DiscordChannelType
 import chat.stoat.core.discord.models.DiscordEmbed
 import chat.stoat.core.discord.models.DiscordGuild
 import chat.stoat.core.discord.models.DiscordMessage
+import chat.stoat.discord.routes.fetchDMs
 import chat.stoat.discord.routes.fetchGuildChannels
+import chat.stoat.discord.routes.fetchGuilds
+import android.util.Log
 import chat.stoat.core.discord.models.DiscordUser
 import chat.stoat.core.discord.models.GatewayReady
 import chat.stoat.core.model.schemas.AutumnResource
@@ -158,6 +161,39 @@ object DiscordToStoat {
 
         ready.privateChannels?.forEach { ch ->
             ch.id?.let { StoatAPI.channelCache[it] = adaptChannel(ch) }
+        }
+    }
+
+    /**
+     * Seeds [StoatAPI] (and [DiscordAPI]) caches from REST endpoints so the UI has
+     * servers, DMs and channels immediately, independent of the gateway. The
+     * reduced guild objects from `/users/@me/guilds` lack [DiscordGuild.description]
+     * and [DiscordGuild.banner]; those arrive later via gateway `GUILD_CREATE`,
+     * which delivers the full guild object.
+     */
+    suspend fun populateFromRest() {
+        runCatching {
+            DiscordHttp.fetchGuilds().forEach { guild ->
+                val gid = guild.id ?: return@forEach
+                DiscordAPI.guildCache[gid] = guild
+                val channels = runCatching { DiscordHttp.fetchGuildChannels(gid) }
+                    .getOrElse { emptyList() }
+                channels.forEach { ch ->
+                    ch.id?.let { cid ->
+                        DiscordAPI.channelCache[cid] = ch
+                        StoatAPI.channelCache[cid] = adaptChannel(ch)
+                    }
+                }
+                StoatAPI.serverCache[gid] = adaptServer(guild, channels.mapNotNull { it.id })
+            }
+            DiscordHttp.fetchDMs().forEach { ch ->
+                ch.id?.let { cid ->
+                    DiscordAPI.dmCache[cid] = ch
+                    StoatAPI.channelCache[cid] = adaptChannel(ch)
+                }
+            }
+        }.onFailure {
+            Log.e("DiscordToStoat", "populateFromRest failed", it)
         }
     }
 }

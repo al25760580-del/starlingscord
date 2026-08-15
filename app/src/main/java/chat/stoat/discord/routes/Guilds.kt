@@ -24,7 +24,9 @@ suspend fun HttpClient.fetchGuilds(): List<DiscordGuild> {
 
 suspend fun HttpClient.fetchGuildChannels(guildId: String): List<DiscordChannel> {
     return try {
-        val response = get("$DISCORD_API/guilds/$guildId/channels")
+        // User-account route. The bot route (/guilds/{id}/channels) returns 403
+        // for a user token, so we must go through /users/@me/guilds/{id}/channels.
+        val response = get("$DISCORD_API/users/@me/guilds/$guildId/channels")
         DiscordJson.decodeFromString(
             ListSerializer(DiscordChannel.serializer()),
             response.bodyAsText(),
