@@ -149,7 +149,11 @@ suspend fun deleteMessage(channelId: String, messageId: String) {
 suspend fun ackChannel(channelId: String, messageId: String = ULID.makeNext()) {
     if (DiscordAPI.isActive) {
         // Discord read-state is managed over the gateway; acknowledge best-effort.
-        runCatching { DiscordHttp.ackChannel(channelId, messageId) }
+        try {
+            DiscordHttp.ackChannel(channelId, messageId)
+        } catch (_: Exception) {
+            // best-effort; read state is also maintained over the gateway
+        }
         return
     }
     StoatHttp.put("/channels/$channelId/ack/$messageId".api())

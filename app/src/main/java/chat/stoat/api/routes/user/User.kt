@@ -130,7 +130,7 @@ suspend fun patchSelf(
 
 suspend fun fetchUser(id: String): User {
     if (DiscordAPI.isActive) {
-        val du = runCatching { DiscordHttp.fetchUser(id) }.getOrNull()
+        val du = DiscordHttp.fetchUser(id)
         return DiscordToStoat.adaptUser(du)?.also { u ->
             u.id?.let { StoatAPI.userCache[it] = u }
         } ?: User.getPlaceholder(id)
@@ -172,7 +172,7 @@ suspend fun addUserIfUnknown(id: String) {
 suspend fun fetchUserProfile(id: String): Profile {
     if (DiscordAPI.isActive) {
         // Discord has no separate profile endpoint; the user object carries bio/banner.
-        val du = runCatching { DiscordHttp.fetchUser(id) }.getOrNull()
+        val du = DiscordHttp.fetchUser(id)
         return Profile(content = du?.bio, background = null)
     }
     val res = StoatHttp.get("/users/$id/profile".api())

@@ -151,8 +151,12 @@ object DiscordAPI {
         setSessionToken(token)
 
         // Persist so a cold start can boot straight into Discord (full_backend mode).
-        runCatching { KVStorage(StoatApplication.instance).set("auth_backend", "discord") }
-        runCatching { KVStorage(StoatApplication.instance).set("discord_session_token", token) }
+        try {
+            KVStorage(StoatApplication.instance).set("auth_backend", "discord")
+            KVStorage(StoatApplication.instance).set("discord_session_token", token)
+        } catch (e: Exception) {
+            Log.w("DiscordAPI", "Failed to persist Discord session", e)
+        }
 
         // Reset any stale Revolt session state so Discord owns the UI caches.
         StoatAPI.userCache.clear()
@@ -204,8 +208,10 @@ object DiscordAPI {
         socketJob?.cancel()
         socketJob = null
         // Clear the persisted Discord session so a cold start does not retry Discord.
-        runCatching { KVStorage(StoatApplication.instance).remove("auth_backend") }
-        runCatching { KVStorage(StoatApplication.instance).remove("discord_session_token") }
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching { KVStorage(StoatApplication.instance).remove("auth_backend") }
+            runCatching { KVStorage(StoatApplication.instance).remove("discord_session_token") }
+        }
         sessionToken = ""
         sessionId = ""
         selfId = null
