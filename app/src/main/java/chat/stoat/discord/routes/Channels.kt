@@ -67,3 +67,9 @@ suspend fun HttpClient.sendMessage(channelId: String, content: String): DiscordM
         null
     }
 }
+
+/** Top-level wrapper so callers can send a Discord message without referencing the
+ *  [HttpClient] extension directly (avoids clashing with Revolt's sendMessage). */
+suspend fun sendDiscordMessage(channelId: String, content: String): DiscordMessage? {
+    return DiscordHttp.sendMessage(channelId, content)
+}
