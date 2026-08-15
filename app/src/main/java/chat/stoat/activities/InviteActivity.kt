@@ -38,6 +38,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import chat.stoat.api.internals.normalizeCdnUrl
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -189,7 +190,7 @@ fun InviteScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         GlideImage(
-                            model = "$STOAT_FILES/banners/${invite?.serverBanner?.id}/${invite?.serverBanner?.filename}",
+                            model = ("$STOAT_FILES/banners/${invite?.serverBanner?.id}/${invite?.serverBanner?.filename}").normalizeCdnUrl(),
                             contentScale = ContentScale.Crop,
                             contentDescription = null,
                             modifier = Modifier
@@ -214,7 +215,7 @@ fun InviteScreen(
                         ) {
                             if (invite?.serverIcon != null) {
                                 RemoteImage(
-                                    url = "$STOAT_FILES/icons/${invite.serverIcon!!.id}/${invite.serverIcon!!.filename}",
+                                    url = ("$STOAT_FILES/icons/${invite.serverIcon!!.id}/${invite.serverIcon!!.filename}").normalizeCdnUrl(),
                                     allowAnimation = false,
                                     description = viewModel.inviteResult?.value?.serverName
                                         ?: stringResource(id = R.string.unknown),

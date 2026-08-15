@@ -9,6 +9,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import chat.stoat.api.internals.normalizeCdnUrl
 import com.bumptech.glide.integration.compose.CrossFade
 import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
 import com.bumptech.glide.integration.compose.GlideImage
@@ -36,7 +37,7 @@ fun RemoteImage(
     }
 
     GlideImage(
-        model = url,
+        model = url.normalizeCdnUrl(),
         contentDescription = description,
         contentScale = contentScale,
         modifier = modifier

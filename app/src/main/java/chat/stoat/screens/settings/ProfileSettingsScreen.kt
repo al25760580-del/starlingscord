@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import chat.stoat.api.internals.normalizeCdnUrl
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -77,7 +78,7 @@ class ProfileSettingsScreenViewModel(val context: Application) :
         StoatAPI.selfId?.let { self ->
             StoatAPI.userCache[self]?.let { user ->
                 user.avatar?.id?.let {
-                    pfpModel = "$STOAT_FILES/avatars/${it}"
+                    pfpModel = ("$STOAT_FILES/avatars/${it}").normalizeCdnUrl()
                 }
                 currentPronouns = user.pronouns
                 pendingPronouns = user.pronouns.orEmpty()
@@ -140,7 +141,7 @@ class ProfileSettingsScreenViewModel(val context: Application) :
             }
 
             pfpModel = StoatAPI.userCache[StoatAPI.selfId]?.avatar?.id?.let {
-                "$STOAT_FILES/avatars/${it}"
+                ("$STOAT_FILES/avatars/${it}").normalizeCdnUrl()
             }
 
             uploadProgress = 0f

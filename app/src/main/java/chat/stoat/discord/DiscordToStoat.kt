@@ -23,6 +23,16 @@ import chat.stoat.core.model.schemas.Server
 import chat.stoat.core.model.schemas.User
 
 /**
+ * Builds a Discord CDN asset URL.
+ * Animated assets are prefixed with `a_` and served as GIFs.
+ * e.g. https://cdn.discordapp.com/avatars/{user_id}/{hash}.png
+ */
+private fun discordCdnUrl(kind: String, id: String, hash: String): String {
+    val ext = if (hash.startsWith("a_")) "gif" else "png"
+    return "https://cdn.discordapp.com/$kind/$id/$hash.$ext"
+}
+
+/**
  * Adapts Discord API/models into Revolt-shaped
  * [chat.stoat.core.model.schemas] objects so that Stoat's existing UI (servers,
  * channels, messages, profile, settings) can render Discord data directly from
@@ -61,7 +71,7 @@ object DiscordToStoat {
             username = u.username,
             displayName = u.globalName,
             discriminator = u.discriminator,
-            avatar = u.avatar?.let { AutumnResource(id = it) },
+            avatar = u.avatar?.let { h -> AutumnResource(id = discordCdnUrl("avatars", u.id, h)) },
             badges = u.publicFlags?.toLong(),
         )
     }
@@ -73,8 +83,8 @@ object DiscordToStoat {
             name = g.name,
             description = g.description,
             channels = channelIds,
-            icon = g.icon?.let { AutumnResource(id = it) },
-            banner = g.banner?.let { AutumnResource(id = it) },
+            icon = g.icon?.let { h -> AutumnResource(id = discordCdnUrl("icons", g.id ?: "", h)) },
+            banner = g.banner?.let { h -> AutumnResource(id = discordCdnUrl("banners", g.id ?: "", h)) },
         )
     }
 
