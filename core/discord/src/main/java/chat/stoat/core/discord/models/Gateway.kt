@@ -1,0 +1,90 @@
+package chat.stoat.core.discord.models
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+
+/**
+ * Raw gateway envelope. `d` is kept as a [JsonElement] so we can defer decoding
+ * to the specific event type once we know the opcode / event name.
+ *
+ * Opcodes: 0 Dispatch, 1 Heartbeat, 2 Identify, 6 Resume, 7 Reconnect,
+ * 8 Request Guild Members, 9 Invalid Session, 10 Hello, 11 Heartbeat ACK.
+ */
+@Serializable
+data class GatewayPayload(
+    val op: Int,
+    val d: JsonElement? = null,
+    val s: Int? = null,
+    val t: String? = null,
+)
+
+@Serializable
+data class GatewayHello(
+    @SerialName("heartbeat_interval")
+    val heartbeatInterval: Long = 0,
+    val _trace: List<String>? = null,
+)
+
+@Serializable
+data class GatewayReady(
+    val v: Int? = null,
+    val user: DiscordUser? = null,
+    val guilds: List<DiscordGuild>? = null,
+    @SerialName("private_channels")
+    val privateChannels: List<DiscordChannel>? = null,
+    @SerialName("session_id")
+    val sessionId: String? = null,
+    val application: GatewayApplication? = null,
+)
+
+@Serializable
+data class GatewayApplication(
+    val id: String? = null,
+    val flags: Int? = null,
+)
+
+/** Sendable IDENTIFY frame (opcode 2). */
+@Serializable
+data class GatewayIdentify(
+    val op: Int = 2,
+    val d: IdentifyData,
+)
+
+@Serializable
+data class IdentifyData(
+    val token: String,
+    val properties: IdentifyProperties,
+    val compress: Boolean = false,
+    val capabilities: Int = 16384,
+    val presence: PresenceData? = null,
+    val intents: Int? = null,
+)
+
+@Serializable
+data class IdentifyProperties(
+    @SerialName("\$os")
+    val os: String = "android",
+    @SerialName("\$browser")
+    val browser: String = "Stoat",
+    @SerialName("\$device")
+    val device: String = "Stoat",
+    @SerialName("\$referrer")
+    val referrer: String = "",
+    @SerialName("\$referring_domain")
+    val referringDomain: String = "",
+)
+
+@Serializable
+data class PresenceData(
+    val status: String = "online",
+    val since: Long? = null,
+    val activities: List<ActivityData> = emptyList(),
+    val afk: Boolean = false,
+)
+
+@Serializable
+data class ActivityData(
+    val name: String = "Stoat",
+    val type: Int = 4,
+)

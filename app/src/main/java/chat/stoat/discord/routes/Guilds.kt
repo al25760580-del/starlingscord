@@ -1,0 +1,34 @@
+package chat.stoat.discord.routes
+
+import chat.stoat.core.discord.models.DiscordChannel
+import chat.stoat.core.discord.models.DiscordGuild
+import chat.stoat.discord.DISCORD_API
+import chat.stoat.discord.DiscordHttp
+import chat.stoat.discord.DiscordJson
+import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsText
+import kotlinx.serialization.builtins.ListSerializer
+
+suspend fun HttpClient.fetchGuilds(): List<DiscordGuild> {
+    return try {
+        val response = get("$DISCORD_API/users/@me/guilds")
+        DiscordJson.decodeFromString(
+            ListSerializer(DiscordGuild.serializer()),
+            response.bodyAsText(),
+        )
+    } catch (e: Exception) {
+        emptyList()
+    }
+}
+
+suspend fun HttpClient.fetchGuildChannels(guildId: String): List<DiscordChannel> {
+    return try {
+        val response = get("$DISCORD_API/guilds/$guildId/channels")
+        DiscordJson.decodeFromString(
+            ListSerializer(DiscordChannel.serializer()),
+            response.bodyAsText(),
+        )
+    } catch (e: Exception) {
+        emptyList()
+    }
+}

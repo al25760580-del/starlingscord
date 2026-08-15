@@ -162,6 +162,7 @@ sentry {
 
 dependencies {
     implementation(project(":core:model"))
+    implementation(project(":core:discord"))
 
     implementation(libs.android.core.ktx)
     implementation(libs.kotlin.reflect)

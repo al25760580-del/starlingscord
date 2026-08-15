@@ -107,6 +107,10 @@ import chat.stoat.screens.labs.LabsRootScreen
 import chat.stoat.screens.login.LoginGreetingScreen
 import chat.stoat.screens.login.LoginScreen
 import chat.stoat.screens.login.MfaScreen
+import chat.stoat.discord.screens.DiscordChannelScreen
+import chat.stoat.discord.screens.DiscordGuildScreen
+import chat.stoat.discord.screens.DiscordHomeScreen
+import chat.stoat.discord.screens.DiscordLoginScreen
 import chat.stoat.screens.login2.InitScreen
 import chat.stoat.screens.main.MainScreen
 import chat.stoat.screens.register.OnboardingScreen
@@ -605,6 +609,17 @@ fun AppEntrypoint(
                             backStackEntry.arguments?.getString("allowedAuthTypes") ?: ""
 
                         MfaScreen(navController, allowedAuthTypes, mfaTicket)
+                    }
+
+                    composable("discord/login") { DiscordLoginScreen(navController) }
+                    composable("discord/home") { DiscordHomeScreen(navController) }
+                    composable("discord/guild/{guildId}") { backStackEntry ->
+                        val guildId = backStackEntry.arguments?.getString("guildId") ?: ""
+                        DiscordGuildScreen(navController, guildId)
+                    }
+                    composable("discord/channel/{channelId}") { backStackEntry ->
+                        val channelId = backStackEntry.arguments?.getString("channelId") ?: ""
+                        DiscordChannelScreen(navController, channelId)
                     }
 
                     composable("register/greeting") { RegisterGreetingScreen(navController) }
