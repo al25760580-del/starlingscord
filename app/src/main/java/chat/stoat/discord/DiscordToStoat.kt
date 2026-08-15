@@ -65,13 +65,16 @@ object DiscordToStoat {
     }
 
     fun adaptUser(u: DiscordUser?): User? {
-        if (u?.id == null) return null
+        // Bind the cross-module nullable id to a local so it can be safely
+        // smart-cast to non-null String (public API props in another module
+        // cannot be smart-cast directly).
+        val uid = u?.id ?: return null
         return User(
-            id = u.id,
+            id = uid,
             username = u.username,
             displayName = u.globalName,
             discriminator = u.discriminator,
-            avatar = u.avatar?.let { h -> AutumnResource(id = discordCdnUrl("avatars", u.id, h)) },
+            avatar = u.avatar?.let { h -> AutumnResource(id = discordCdnUrl("avatars", uid, h)) },
             badges = u.publicFlags?.toLong(),
         )
     }
