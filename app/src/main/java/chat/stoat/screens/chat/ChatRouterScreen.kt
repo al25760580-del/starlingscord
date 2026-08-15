@@ -173,7 +173,14 @@ class ChatRouterViewModel(
             runCatching { fetchSelf() }.getOrNull()?.let { user ->
                 kvStorage.set("selfId", user.id ?: "")
                 kvStorage.set("selfName", User.resolveDefaultName(user))
-                kvStorage.set("selfAvatarUrl", user.avatar?.id?.let { "$STOAT_FILES/avatars/$it" } ?: "")
+                // For Discord the avatar id is already a full cdn.discordapp.com URL,
+                // so don't wrap it in a Stoat files path (that would 404 / route to Stoat).
+                val selfAvatarUrl = if (DiscordAPI.isActive) {
+                    user.avatar?.id ?: ""
+                } else {
+                    user.avatar?.id?.let { "$STOAT_FILES/avatars/$it" } ?: ""
+                }
+                kvStorage.set("selfAvatarUrl", selfAvatarUrl)
             }
 
             val pendingNavigation = NotificationDeepLink.pendingNavigation.value

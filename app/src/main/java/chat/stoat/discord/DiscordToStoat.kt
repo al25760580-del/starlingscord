@@ -24,12 +24,14 @@ import chat.stoat.core.model.schemas.User
 
 /**
  * Builds a Discord CDN asset URL.
- * Animated assets are prefixed with `a_` and served as GIFs.
+ *
+ * NOTE: Discord's CDN rejects `.gif` requests with HTTP 415 ("Invalid resource")
+ * even for animated `a_` hashes. `.png` (and `.webp`/`.jpeg`) all return 200, so we
+ * always request `.png`. This keeps avatars / server icons / banners rendering.
  * e.g. https://cdn.discordapp.com/avatars/{user_id}/{hash}.png
  */
 private fun discordCdnUrl(kind: String, id: String, hash: String): String {
-    val ext = if (hash.startsWith("a_")) "gif" else "png"
-    return "https://cdn.discordapp.com/$kind/$id/$hash.$ext"
+    return "https://cdn.discordapp.com/$kind/$id/$hash.png"
 }
 
 /**

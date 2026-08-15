@@ -56,9 +56,23 @@ data class IdentifyData(
     val token: String,
     val properties: IdentifyProperties,
     val compress: Boolean = false,
-    val capabilities: Int = 16384,
+    // 16381 is the capability bitfield Discord's own user client sends. A
+    // non-standard value (e.g. 16384) can make the gateway reject the identify
+    // and drop the connection immediately after HELLO.
+    val capabilities: Int = 16381,
     val presence: PresenceData? = null,
     val intents: Int? = null,
+    @SerialName("client_state")
+    val clientState: ClientState? = null,
+)
+
+/** Optional cache-state object sent during identify (mirrors the official client). */
+@Serializable
+data class ClientState(
+    @SerialName("api_code_version")
+    val apiCodeVersion: Int = 0,
+    @SerialName("guild_versions")
+    val guildVersions: Map<String, Int> = emptyMap(),
 )
 
 @Serializable

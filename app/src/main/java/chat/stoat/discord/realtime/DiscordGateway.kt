@@ -54,6 +54,14 @@ object DiscordGateway {
             var heartbeatJob: Job? = null
             try {
                 for (frame in incoming) {
+                    if (frame is Frame.Close) {
+                        val reason = runCatching { frame.readReason() }.getOrNull()
+                        Log.w(
+                            "DiscordGateway",
+                            "Gateway closed by server: code=${reason?.code}, message='${reason?.message}'",
+                        )
+                        break
+                    }
                     if (frame !is Frame.Text) continue
                     val text = frame.readText()
                     val payload = try {
@@ -203,8 +211,9 @@ object DiscordGateway {
                 token = token,
                 properties = IdentifyProperties(),
                 compress = false,
-                capabilities = 16384,
+                capabilities = 16381,
                 presence = PresenceData(),
+                clientState = ClientState(),
             ),
         )
         send(DiscordJson.encodeToString(GatewayIdentify.serializer(), identify))
