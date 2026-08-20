@@ -10,6 +10,7 @@ import chat.stoat.api.StoatAPI
 import chat.stoat.persistence.KVStorage
 import chat.stoat.core.discord.models.DiscordChannel
 import chat.stoat.core.discord.models.DiscordGuild
+import chat.stoat.core.discord.models.DiscordGuildEmoji
 import chat.stoat.core.discord.models.DiscordMessage
 import chat.stoat.core.discord.models.DiscordUser
 import chat.stoat.discord.DiscordToStoat
@@ -134,6 +135,9 @@ object DiscordAPI {
     val guildCache = mutableStateMapOf<String, DiscordGuild>()
     val channelCache = mutableStateMapOf<String, DiscordChannel>()
     val messageCache = mutableStateMapOf<String, DiscordMessage>()
+    /** Guild custom emoji, keyed by snowflake id, used to render custom emoji
+     *  in messages and reactions from the Discord CDN. */
+    val emojiCache = mutableStateMapOf<String, DiscordGuildEmoji>()
     val dmCache = mutableStateMapOf<String, DiscordChannel>()
 
     fun setSessionToken(token: String) {
@@ -224,6 +228,7 @@ object DiscordAPI {
         guildCache.clear()
         channelCache.clear()
         messageCache.clear()
+        emojiCache.clear()
         dmCache.clear()
         // Clear the Stoat UI caches we populated so the UI returns to a clean state.
         StoatAPI.userCache.clear()

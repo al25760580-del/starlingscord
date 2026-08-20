@@ -9,6 +9,7 @@ import chat.stoat.core.discord.models.DiscordGuild
 import chat.stoat.core.discord.models.DiscordMessage
 import chat.stoat.discord.routes.fetchDMs
 import chat.stoat.discord.routes.fetchGuildChannels
+import chat.stoat.discord.routes.fetchGuildEmojis
 import chat.stoat.discord.routes.fetchGuilds
 import android.util.Log
 import chat.stoat.core.discord.models.DiscordUser
@@ -208,6 +209,8 @@ object DiscordToStoat {
                 }
             }
         }
+        val replies = m.messageReference?.messageId?.let { listOf(snowflakeToUlid(it)) }
+
         val result = Message(
             id = id,
             channel = m.channelId,
@@ -216,9 +219,34 @@ object DiscordToStoat {
             embeds = embeds.ifEmpty { null },
             mentions = m.mentions?.mapNotNull { it.id },
             pinned = m.pinned,
+            replies = replies,
+            reactions = m.reactions?.let { mapDiscordReactions(it) },
         )
         m.id?.let { DiscordAPI.idMap[id] = it }
+
+        // Cache the referenced (replied-to) message so the InReplyTo preview can
+        // resolve it directly from StoatAPI.messageCache.
+        m.referencedMessage?.let { ref ->
+            val refId = snowflakeToUlid(ref.id)
+            if (refId != null && refId !in StoatAPI.messageCache) {
+                adaptMessage(ref)?.let { StoatAPI.messageCache[refId] = it }
+            }
+        }
         return result
+    }
+
+    /** Map Discord reactions onto Revolt's `reactions: Map<emojiKey, List<userId>>`
+     *  shape. The key is the emoji's snowflake id (custom) or its char (unicode);
+     *  the list contains the self user when [DiscordReaction.me] is true so the
+     *  existing Reaction UI can show the "own reaction" highlight + toggle. */
+    private fun mapDiscordReactions(reactions: List<DiscordReaction>): Map<String, List<String>> {
+        val map = mutableMapOf<String, List<String>>()
+        reactions.forEach { r ->
+            val emoji = r.emoji ?: return@forEach
+            val key = emoji.id ?: emoji.name ?: return@forEach
+            map[key] = if (r.me) listOf(StoatAPI.selfId ?: "") else emptyList()
+        }
+        return map
     }
 
     private fun adaptEmbed(e: DiscordEmbed): Embed {
@@ -244,6 +272,9 @@ object DiscordToStoat {
             val channels = runCatching { DiscordHttp.fetchGuildChannels(gid) }
                 .getOrElse { emptyList() }
             upsertServer(gid, guild, channels)
+            runCatching { DiscordHttp.fetchGuildEmojis(gid) }
+                .getOrElse { emptyList() }
+                .forEach { e -> e.id?.let { DiscordAPI.emojiCache[it] = e } }
         }
 
         ready.privateChannels?.forEach { ch ->
@@ -266,6 +297,9 @@ object DiscordToStoat {
                 val channels = runCatching { DiscordHttp.fetchGuildChannels(gid) }
                     .getOrElse { emptyList() }
                 upsertServer(gid, guild, channels)
+                runCatching { DiscordHttp.fetchGuildEmojis(gid) }
+                    .getOrElse { emptyList() }
+                    .forEach { e -> e.id?.let { DiscordAPI.emojiCache[it] = e } }
             }
             DiscordHttp.fetchDMs().forEach { ch ->
                 ch.id?.let { cid ->

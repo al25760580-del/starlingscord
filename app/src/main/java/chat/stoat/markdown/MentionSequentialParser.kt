@@ -30,27 +30,35 @@ class MentionSequentialParser(private val content: String) : SequentialParser {
                 if (lookahead.type == MarkdownTokenTypes.GT) {
                     val innerText = content.substring(ltEnd, lookahead.start)
 
-                    when {
-                        innerText.length == 27 && innerText[0] == '@' && innerText.substring(1).isUlid() -> {
-                            result.withNode(SequentialParser.Node(iterator.index..lookahead.index + 1, USER_MENTION_ELEMENT_TYPE))
-                            iterator = lookahead.advance()
-                            continue
+                    // Discord uses decimal snowflake ids (not Revolt's 26-char
+                    // ULIDs) inside mention tokens, and supports `<@!id>`
+                    // (nickname mention) and `<@&id>` (role mention). Accept both
+                    // ULID and purely-numeric (snowflake) ids so Revolt AND
+                    // Discord mentions render.
+                    val mentionType = when {
+                        innerText == "@EVERYONE" || innerText == "@ONLINE" -> MASS_MENTION_ELEMENT_TYPE
+                        innerText.startsWith("@&") && innerText.length > 2 -> {
+                            val id = innerText.substring(2)
+                            if (id.isUlid() || id.all { it.isDigit() }) ROLE_MENTION_ELEMENT_TYPE else null
                         }
-                        innerText.length == 27 && innerText[0] == '#' && innerText.substring(1).isUlid() -> {
-                            result.withNode(SequentialParser.Node(iterator.index..lookahead.index + 1, CHANNEL_MENTION_ELEMENT_TYPE))
-                            iterator = lookahead.advance()
-                            continue
+                        innerText.startsWith("@") && innerText.length > 1 -> {
+                            val id = innerText.substring(1).removePrefix("!")
+                            if (id.isUlid() || id.all { it.isDigit() }) USER_MENTION_ELEMENT_TYPE else null
                         }
-                        innerText.length == 27 && innerText[0] == '%' && innerText.substring(1).isUlid() -> {
-                            result.withNode(SequentialParser.Node(iterator.index..lookahead.index + 1, ROLE_MENTION_ELEMENT_TYPE))
-                            iterator = lookahead.advance()
-                            continue
+                        innerText.startsWith("#") && innerText.length > 1 -> {
+                            val id = innerText.substring(1)
+                            if (id.isUlid() || id.all { it.isDigit() }) CHANNEL_MENTION_ELEMENT_TYPE else null
                         }
-                        innerText == "@EVERYONE" || innerText == "@ONLINE" -> {
-                            result.withNode(SequentialParser.Node(iterator.index..lookahead.index + 1, MASS_MENTION_ELEMENT_TYPE))
-                            iterator = lookahead.advance()
-                            continue
+                        innerText.startsWith("%") && innerText.length > 1 -> {
+                            val id = innerText.substring(1)
+                            if (id.isUlid() || id.all { it.isDigit() }) ROLE_MENTION_ELEMENT_TYPE else null
                         }
+                        else -> null
+                    }
+                    if (mentionType != null) {
+                        result.withNode(SequentialParser.Node(iterator.index..lookahead.index + 1, mentionType))
+                        iterator = lookahead.advance()
+                        continue
                     }
                 }
             }

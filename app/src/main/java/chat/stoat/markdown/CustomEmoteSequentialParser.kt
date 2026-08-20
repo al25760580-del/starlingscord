@@ -17,7 +17,35 @@ class CustomEmoteSequentialParser(private val content: String) : SequentialParse
         var iterator: TokensCache.Iterator = tokens.RangesListIterator(rangesToGlue)
 
         while (iterator.type != null) {
-            if (iterator.type == MarkdownTokenTypes.COLON) {
+            if (iterator.type == MarkdownTokenTypes.LT) {
+                // Discord custom emoji tokens: <:name:id> and <a:name:id>
+                // (animated). Produce a CUSTOM_EMOTE node so ChatMarkdown can
+                // render them from the Discord CDN.
+                val openEnd = iterator.end
+                var lookahead = iterator.advance()
+                var hops = 0
+                while (lookahead.type != null &&
+                    lookahead.type != MarkdownTokenTypes.GT &&
+                    lookahead.type != MarkdownTokenTypes.EOL &&
+                    hops < 10
+                ) {
+                    lookahead = lookahead.advance()
+                    hops++
+                }
+                if (lookahead.type == MarkdownTokenTypes.GT) {
+                    val inner = content.substring(openEnd, lookahead.start)
+                    if (Regex("^a?:[^:]+:\\d+\$").matches(inner)) {
+                        result.withNode(
+                            SequentialParser.Node(
+                                iterator.index..lookahead.index + 1,
+                                CUSTOM_EMOTE_ELEMENT_TYPE
+                            )
+                        )
+                        iterator = lookahead.advance()
+                        continue
+                    }
+                }
+            } else if (iterator.type == MarkdownTokenTypes.COLON) {
                 val openEnd = iterator.end
 
                 var lookahead = iterator.advance()

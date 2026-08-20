@@ -49,6 +49,7 @@ import chat.stoat.R
 import chat.stoat.activities.InviteActivity
 import chat.stoat.api.StoatAPI
 import chat.stoat.api.internals.isUlid
+import chat.stoat.discord.DiscordAPI
 import chat.stoat.api.routes.custom.fetchEmoji
 import chat.stoat.api.settings.LoadedSettings
 import chat.stoat.callbacks.Action
@@ -128,8 +129,15 @@ private fun collectEmoteUlids(node: ASTNode, content: String): List<String> {
     val ulids = mutableListOf<String>()
     node.children.forEach { child ->
         when (child.type) {
-            CUSTOM_EMOTE_ELEMENT_TYPE -> ulids += child.getTextInNode(content).toString()
-                .removeSurrounding(":")
+            CUSTOM_EMOTE_ELEMENT_TYPE -> {
+                val text = child.getTextInNode(content).toString()
+                ulids += if (text.startsWith("<:")) {
+                    // Discord custom emoji: keep just the snowflake id
+                    text.removeSurrounding("<", ">").substringAfterLast(":")
+                } else {
+                    text.removeSurrounding(":")
+                }
+            }
 
             else -> ulids += collectEmoteUlids(child, content)
         }
@@ -267,9 +275,18 @@ fun ChatMarkdown(
         markdownAnnotator { content, child ->
             when (child.type) {
                 CUSTOM_EMOTE_ELEMENT_TYPE -> {
-                    val ulid = child.getTextInNode(content).toString().removeSurrounding(":")
-                    val name = StoatAPI.emojiCache[ulid]?.name ?: ":$ulid:"
-                    appendInlineContent("emote:$ulid", name)
+                    val raw = child.getTextInNode(content).toString()
+                    if (raw.startsWith("<:")) {
+                        // Discord custom emoji: <:name:id> / <a:name:id>
+                        val id = raw.removeSurrounding("<", ">").substringAfterLast(":")
+                        val info = DiscordAPI.emojiCache[id]
+                        val name = info?.name ?: raw
+                        appendInlineContent("discorde:$id", name)
+                    } else {
+                        val ulid = raw.removeSurrounding(":")
+                        val name = StoatAPI.emojiCache[ulid]?.name ?: ":$ulid:"
+                        appendInlineContent("emote:$ulid", name)
+                    }
                     true
                 }
 
@@ -288,7 +305,8 @@ fun ChatMarkdown(
 
                 USER_MENTION_ELEMENT_TYPE -> {
                     val raw = child.getTextInNode(content).toString()
-                    val ulid = raw.substring(2, raw.length - 1)
+                    var ulid = raw.substring(2, raw.length - 1)
+                    if (ulid.startsWith("!")) ulid = ulid.substring(1)
                     val member = serverId?.let { StoatAPI.members.getMember(it, ulid) }
                     val displayName = member?.nickname
                         ?: StoatAPI.userCache[ulid]?.let { User.resolveDefaultName(it) }
@@ -312,9 +330,11 @@ fun ChatMarkdown(
                 ROLE_MENTION_ELEMENT_TYPE -> {
                     val raw = child.getTextInNode(content).toString()
                     val roleId = raw.substring(2, raw.length - 1)
-                    if (roleId.isUlid()) {
-                        val role = serverId?.let { StoatAPI.serverCache[it]?.roles?.get(roleId) }
-                        val roleColor = role?.colour
+                    // Discord role ids are decimal snowflakes, not ULIDs, so look
+                    // the role up regardless of id format.
+                    val role = serverId?.let { StoatAPI.serverCache[it]?.roles?.get(roleId) }
+                    if (role != null) {
+                        val roleColor = role.colour
                             ?.takeIf { !it.contains("gradient") }
                             ?.let { runCatching { Color(it.toColorInt()) }.getOrNull() }
                             ?: primaryColor
@@ -324,7 +344,7 @@ fun ChatMarkdown(
                                 background = roleColor.copy(alpha = 0.2f)
                             )
                         ) {
-                            append("@${role?.name ?: roleId}")
+                            append("@${role.name ?: roleId}")
                         }
                     } else {
                         append(raw)
@@ -334,7 +354,12 @@ fun ChatMarkdown(
 
                 MASS_MENTION_ELEMENT_TYPE -> {
                     val raw = child.getTextInNode(content).toString()
-                    val displayText = if (raw.contains("EVERYONE")) "@everyone" else "@online"
+                    val lower = raw.lowercase()
+                    val displayText = when {
+                        lower.contains("everyone") -> "@everyone"
+                        lower.contains("here") -> "@here"
+                        else -> "@online"
+                    }
                     withStyle(
                         SpanStyle(
                             color = primaryColor,
@@ -507,17 +532,18 @@ fun ChatMarkdown(
                                 )
                             })
                     }
-                    emoteUlids.forEach { ulid ->
+                    emoteUlids.forEach { emoteKey ->
+                        val discordEmote = DiscordAPI.emojiCache[emoteKey]
                         put(
-                            "emote:$ulid", InlineTextContent(
+                            if (discordEmote != null) "discorde:$emoteKey" else "emote:$emoteKey", InlineTextContent(
                                 Placeholder(
                                     width = fontSize * 1.5f,
                                     height = fontSize * 1.5f,
                                     placeholderVerticalAlign = PlaceholderVerticalAlign.Center,
                                 )
                             ) { _ ->
-                                val emote = StoatAPI.emojiCache[ulid]
-                                if (emote == null) {
+                                val emote = StoatAPI.emojiCache[emoteKey]
+                                if (emote == null && discordEmote == null) {
                                     LaunchedEffect(ulid) {
                                         try {
                                             StoatAPI.emojiCache[ulid] = fetchEmoji(ulid)
@@ -527,8 +553,8 @@ fun ChatMarkdown(
                                 } else {
                                     with(LocalDensity.current) {
                                         RemoteImage(
-                                            url = "$STOAT_FILES/emojis/$ulid",
-                                            description = emote.name,
+                                            url = if (discordEmote != null) "https://cdn.discordapp.com/emojis/${discordEmote.id}.png" else "$STOAT_FILES/emojis/$emoteKey",
+                                            description = discordEmote?.name ?: emote?.name,
                                             contentScale = ContentScale.Fit,
                                             modifier = Modifier
                                                 .width((fontSize * 1.5f).toDp())
@@ -540,7 +566,7 @@ fun ChatMarkdown(
                                                     scope.launch {
                                                         ActionChannel.send(
                                                             Action.EmoteInfo(
-                                                                ulid
+                                                                emoteKey
                                                             )
                                                         )
                                                     }

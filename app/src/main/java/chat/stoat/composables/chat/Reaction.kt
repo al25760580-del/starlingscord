@@ -32,6 +32,7 @@ import chat.stoat.api.StoatAPI
 import chat.stoat.api.internals.isUlid
 import chat.stoat.composables.generic.RemoteImage
 import chat.stoat.core.model.data.STOAT_FILES
+import chat.stoat.discord.DiscordAPI
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -76,6 +77,13 @@ fun Reaction(
                 RemoteImage(
                     url = "$STOAT_FILES/emojis/${emoji}",
                     description = null,
+                    modifier = Modifier.size(16.dp)
+                )
+            } else if (DiscordAPI.isActive && DiscordAPI.emojiCache.containsKey(emoji)) {
+                val info = DiscordAPI.emojiCache[emoji]
+                RemoteImage(
+                    url = "https://cdn.discordapp.com/emojis/${info?.id ?: emoji}.png",
+                    description = info?.name,
                     modifier = Modifier.size(16.dp)
                 )
             } else {

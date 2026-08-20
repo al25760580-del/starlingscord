@@ -45,6 +45,7 @@ import chat.stoat.discord.DiscordHttp
 import chat.stoat.discord.DiscordToStoat
 import chat.stoat.discord.routes.fetchChannelMessages
 import chat.stoat.discord.routes.sendDiscordMessage
+import chat.stoat.core.discord.models.DiscordMessageReference
 import chat.stoat.api.settings.GeoStateProvider
 import chat.stoat.callbacks.Action
 import chat.stoat.callbacks.ActionChannel
@@ -503,7 +504,14 @@ class ChannelScreenViewModel(
         // 1. they will be cleared
         // 2. if the user changes the content while the message is being sent we want to persist
         //    the original content
-        val content = MessageProcessor.processOutgoing(draftContent, channel?.server)
+        // Revolt's processOutgoing rewrites `@name#disc` -> `<@uid>` and
+        // `:shortcode:` -> unicode, which would corrupt Discord's `<@snowflake>`
+        // / `<:name:id>` tokens. Discord expects raw content, so skip it there.
+        val content = if (DiscordAPI.isActive) {
+            draftContent
+        } else {
+            MessageProcessor.processOutgoing(draftContent, channel?.server)
+        }
         val replyTo = draftReplyTo.toList()
         val returnToLatestBeforeRenderingSend = canLoadNewer
 
@@ -594,9 +602,18 @@ class ChannelScreenViewModel(
                     // Discord text send: emit the adapted message straight into
                     // Stoat's websocket frame channel so the existing
                     // listenToWsEvents pipeline swaps the prospective message.
+                    val replyReference = replyTo.firstOrNull()?.id?.let { replyUlid ->
+                        DiscordAPI.idMap[replyUlid]?.let { repliedSnowflake ->
+                            DiscordMessageReference(
+                                messageId = repliedSnowflake,
+                                channelId = channel?.id,
+                            )
+                        }
+                    }
                     val sent = sendDiscordMessage(
                         channelId = channel?.id ?: return@launch,
                         content = content,
+                        messageReference = replyReference,
                     )
                     val adapted =
                         sent?.let { DiscordToStoat.adaptMessage(it) }?.copy(nonce = nonce)
