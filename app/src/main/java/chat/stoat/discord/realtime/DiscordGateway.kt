@@ -163,16 +163,10 @@ object DiscordGateway {
                 )
                 guild.id?.let { gid ->
                     DiscordAPI.guildCache[gid] = guild
-                    // The full guild object carries channels, description and
-                    // banner -- none of which are present on the reduced guild
-                    // shapes from READY or /users/@me/guilds.
-                    val channelIds = guild.channels?.mapNotNull { it.id } ?: emptyList()
-                    guild.channels?.forEach { ch ->
-                        ch.id?.let { cid ->
-                            StoatAPI.channelCache[cid] = DiscordToStoat.adaptChannel(ch)
-                        }
-                    }
-                    StoatAPI.serverCache[gid] = DiscordToStoat.adaptServer(guild, channelIds)
+                    // The full guild object carries channels (incl. categories)
+                    // and banner -- none of which are present on the reduced
+                    // guild shapes from READY or /users/@me/guilds.
+                    DiscordToStoat.upsertServer(gid, guild, guild.channels ?: emptyList())
                 }
             }
 

@@ -14,6 +14,7 @@ import android.util.Log
 import chat.stoat.core.discord.models.DiscordUser
 import chat.stoat.core.discord.models.GatewayReady
 import chat.stoat.core.model.schemas.AutumnResource
+import chat.stoat.core.model.schemas.Category
 import chat.stoat.core.model.schemas.Channel
 import chat.stoat.core.model.schemas.ChannelType
 import chat.stoat.core.model.schemas.Embed
@@ -94,18 +95,6 @@ object DiscordToStoat {
         )
     }
 
-    fun adaptServer(g: DiscordGuild, channelIds: List<String> = emptyList()): Server {
-        return Server(
-            id = g.id,
-            owner = g.ownerId,
-            name = g.name,
-            description = g.description,
-            channels = channelIds,
-            icon = g.icon?.let { h -> AutumnResource(id = discordCdnUrl("icons", g.id ?: "", h)) },
-            banner = g.banner?.let { h -> AutumnResource(id = discordCdnUrl("banners", g.id ?: "", h)) },
-        )
-    }
-
     fun adaptChannel(c: DiscordChannel): Channel {
         val type = when (c.type) {
             DiscordChannelType.DM -> ChannelType.DirectMessage
@@ -124,6 +113,80 @@ object DiscordToStoat {
             nsfw = c.nsfw,
             server = c.guildId,
             lastMessageID = c.lastMessageId,
+        )
+    }
+
+    /**
+     * Channel types that belong in the channel list. Categories, forums,
+     * directories and threads are excluded — categories are rendered as Revolt
+     * [Category] headers instead, and the others don't map to a normal text row.
+     */
+    fun isListableChannel(type: Int): Boolean = when (type) {
+        DiscordChannelType.GUILD_CATEGORY,
+        DiscordChannelType.GUILD_FORUM,
+        DiscordChannelType.GUILD_DIRECTORY,
+        DiscordChannelType.ANNOUNCEMENT_THREAD,
+        DiscordChannelType.PUBLIC_THREAD,
+        DiscordChannelType.PRIVATE_THREAD -> false
+        else -> true
+    }
+
+    /**
+     * Update the cached [Server] for [gid] from a Discord guild + its channels.
+     *
+     * - Adapts listable channels into [StoatAPI.channelCache].
+     * - Derives Revolt-style [Category] objects from Discord category channels,
+     *   each carrying the ids of the channels nested under it (in position order).
+     * - Records top-level channel ids on [Server.channels].
+     *
+     * Crucially, if this payload yields no channels/categories it PRESERVES the
+     * already-cached ones, so a flaky REST/gateway fetch can never wipe out
+     * channels that were already being shown (the intermittent
+     * "channels appear then vanish" bug).
+     */
+    fun upsertServer(gid: String, guild: DiscordGuild, rawChannels: List<DiscordChannel>) {
+        val listable = rawChannels.filter { isListableChannel(it.type) }
+        listable.forEach { ch -> ch.id?.let { StoatAPI.channelCache[it] = adaptChannel(ch) } }
+
+        val categories = rawChannels.filter { it.type == DiscordChannelType.GUILD_CATEGORY }
+        val categoryIds = categories.mapNotNull { it.id }.toSet()
+
+        val revoltCategories = categories.sortedBy { it.position ?: 0 }.mapNotNull { cat ->
+            val cid = cat.id ?: return@mapNotNull null
+            Category(
+                id = cid,
+                title = cat.name ?: "Category",
+                // Children resolve by parent_id; sorted by position like Discord.
+                channels = listable
+                    .filter { it.type != DiscordChannelType.GUILD_CATEGORY && it.parentId == cid }
+                    .sortedBy { it.position ?: 0 }
+                    .mapNotNull { it.id },
+            )
+        }
+
+        // Top-level = channels with no parent, or a parent that isn't a known
+        // category (orphans) — so nothing gets dropped.
+        val topLevel = listable
+            .filter {
+                it.type != DiscordChannelType.GUILD_CATEGORY &&
+                    (it.parentId.isNullOrBlank() || it.parentId !in categoryIds)
+            }
+            .sortedBy { it.position ?: 0 }
+            .mapNotNull { it.id }
+
+        val existing = StoatAPI.serverCache[gid]
+        val base = existing ?: Server(id = gid)
+        StoatAPI.serverCache[gid] = Server(
+            id = gid,
+            owner = guild.ownerId ?: base.owner,
+            name = guild.name ?: base.name,
+            description = guild.description ?: base.description,
+            channels = if (topLevel.isNotEmpty()) topLevel else base.channels,
+            categories = if (revoltCategories.isNotEmpty()) revoltCategories else base.categories,
+            icon = guild.icon?.let { h -> AutumnResource(id = discordCdnUrl("icons", gid, h)) }
+                ?: base.icon,
+            banner = guild.banner?.let { h -> AutumnResource(id = discordCdnUrl("banners", gid, h)) }
+                ?: base.banner,
         )
     }
 
@@ -180,11 +243,7 @@ object DiscordToStoat {
             val gid = guild.id ?: return@forEach
             val channels = runCatching { DiscordHttp.fetchGuildChannels(gid) }
                 .getOrElse { emptyList() }
-            channels.forEach { ch ->
-                ch.id?.let { StoatAPI.channelCache[it] = adaptChannel(ch) }
-            }
-            val channelIds = channels.mapNotNull { it.id }
-            StoatAPI.serverCache[gid] = adaptServer(guild, channelIds)
+            upsertServer(gid, guild, channels)
         }
 
         ready.privateChannels?.forEach { ch ->
@@ -206,13 +265,7 @@ object DiscordToStoat {
                 DiscordAPI.guildCache[gid] = guild
                 val channels = runCatching { DiscordHttp.fetchGuildChannels(gid) }
                     .getOrElse { emptyList() }
-                channels.forEach { ch ->
-                    ch.id?.let { cid ->
-                        DiscordAPI.channelCache[cid] = ch
-                        StoatAPI.channelCache[cid] = adaptChannel(ch)
-                    }
-                }
-                StoatAPI.serverCache[gid] = adaptServer(guild, channels.mapNotNull { it.id })
+                upsertServer(gid, guild, channels)
             }
             DiscordHttp.fetchDMs().forEach { ch ->
                 ch.id?.let { cid ->

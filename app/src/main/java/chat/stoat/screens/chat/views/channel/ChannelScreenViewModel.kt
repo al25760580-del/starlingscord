@@ -52,6 +52,7 @@ import chat.stoat.callbacks.UiCallback
 import chat.stoat.callbacks.UiCallbacks
 import chat.stoat.composables.markdown.prose.easyLineBreaks
 import chat.stoat.core.model.schemas.Channel
+import chat.stoat.core.model.schemas.ChannelType
 import chat.stoat.core.model.schemas.Message
 import chat.stoat.internals.text.MessageProcessor
 import chat.stoat.internals.text.stripPUAChars
@@ -275,7 +276,14 @@ class ChannelScreenViewModel(
         }
 
         val permission = Roles.permissionFor(channel!!, selfUser, selfMember)
-        val canSend = permission has PermissionBit.SendMessage
+        // Discord-adapted channels carry no Revolt permission model, so the
+        // Revolt permission bit is always absent. Assume the user can send in
+        // text/DM/announcement channels; voice channels have no text composer.
+        val canSend = if (DiscordAPI.isActive) {
+            channel!!.channelType != ChannelType.VoiceChannel
+        } else {
+            permission has PermissionBit.SendMessage
+        }
 
         val partnerId = ChannelUtils.resolveDMPartner(channel!!)
 
