@@ -7,6 +7,7 @@ import chat.stoat.core.discord.models.DiscordChannelType
 import chat.stoat.core.discord.models.DiscordEmbed
 import chat.stoat.core.discord.models.DiscordGuild
 import chat.stoat.core.discord.models.DiscordMessage
+import chat.stoat.core.discord.models.DiscordReaction
 import chat.stoat.discord.routes.fetchDMs
 import chat.stoat.discord.routes.fetchGuildChannels
 import chat.stoat.discord.routes.fetchGuildEmojis
@@ -209,7 +210,7 @@ object DiscordToStoat {
                 }
             }
         }
-        val replies = m.messageReference?.messageId?.let { listOf(snowflakeToUlid(it)) }
+        val replies = m.messageReference?.messageId?.let { snowflakeToUlid(it) }?.let { listOf(it) }
 
         val result = Message(
             id = id,

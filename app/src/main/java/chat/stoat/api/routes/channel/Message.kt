@@ -4,6 +4,8 @@ import chat.stoat.api.StoatHttp
 import chat.stoat.api.api
 import chat.stoat.discord.DiscordAPI
 import chat.stoat.discord.DiscordHttp
+import chat.stoat.discord.routes.reactDiscord
+import chat.stoat.discord.routes.unreactDiscord
 import io.ktor.client.request.delete
 import io.ktor.client.request.put
 

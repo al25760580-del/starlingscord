@@ -544,9 +544,9 @@ fun ChatMarkdown(
                             ) { _ ->
                                 val emote = StoatAPI.emojiCache[emoteKey]
                                 if (emote == null && discordEmote == null) {
-                                    LaunchedEffect(ulid) {
+                                    LaunchedEffect(emoteKey) {
                                         try {
-                                            StoatAPI.emojiCache[ulid] = fetchEmoji(ulid)
+                                            StoatAPI.emojiCache[emoteKey] = fetchEmoji(emoteKey)
                                         } catch (_: Exception) {
                                         }
                                     }
