@@ -4,6 +4,7 @@ import android.content.Context
 import chat.stoat.R
 import chat.stoat.StoatApplication
 import chat.stoat.api.StoatAPI
+import chat.stoat.discord.DiscordAPI
 import chat.stoat.api.StoatJson
 import chat.stoat.core.model.schemas.Server
 import kotlinx.serialization.Serializable
@@ -72,6 +73,14 @@ class EmojiImpl {
     }
 
     fun serversWithEmotes(): List<Server> {
+        if (DiscordAPI.isActive) {
+            return DiscordAPI.emojiCache.values.mapNotNull { it.guildId }
+                .distinct()
+                .mapNotNull { gid ->
+                    val g = DiscordAPI.guildCache[gid]
+                    Server(id = gid, name = g?.name)
+                }
+        }
         return StoatAPI
             .emojiCache
             .values
@@ -87,10 +96,25 @@ class EmojiImpl {
 
     fun serverEmoteList(server: Server): List<EmojiPickerItem> {
         val list = mutableListOf<EmojiPickerItem>()
-        val emotes = StoatAPI.emojiCache.values.filter { it.parent?.id == server.id }
+
+        val emotes = if (DiscordAPI.isActive) {
+            DiscordAPI.emojiCache.values.filter { it.guildId == server.id }.map { e ->
+                EmojiPickerItem.ServerEmote(
+                    chat.stoat.core.model.schemas.Emoji(
+                        id = e.id,
+                        parent = chat.stoat.core.model.schemas.EmojiParent(type = "Server", id = server.id),
+                        name = e.name,
+                        animated = e.animated,
+                    )
+                )
+            }
+        } else {
+            StoatAPI.emojiCache.values.filter { it.parent?.id == server.id }
+                .map { EmojiPickerItem.ServerEmote(it) }
+        }
 
         list.add(EmojiPickerItem.Section(Category.ServerEmoteCategory(server)))
-        list.addAll(emotes.map { EmojiPickerItem.ServerEmote(it) })
+        list.addAll(emotes)
 
         return list
     }
@@ -173,7 +197,11 @@ class EmojiImpl {
                     it is EmojiPickerItem.Section && it.category is Category.ServerEmoteCategory && it.category.server == server
                 }
             val allEmotesInThatServer =
-                StoatAPI.emojiCache.values.filter { it.parent?.id == server.id }
+                if (DiscordAPI.isActive) {
+                    DiscordAPI.emojiCache.values.filter { it.guildId == server.id }
+                } else {
+                    StoatAPI.emojiCache.values.filter { it.parent?.id == server.id }
+                }
             val lastIndex = index + allEmotesInThatServer.size
 
             output[Category.ServerEmoteCategory(server)] = Pair(index, lastIndex)

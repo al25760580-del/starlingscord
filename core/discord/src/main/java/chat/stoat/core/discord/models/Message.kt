@@ -30,6 +30,8 @@ data class DiscordMessage(
     val referencedMessage: DiscordMessage? = null,
     @SerialName("reactions")
     val reactions: List<DiscordReaction>? = null,
+    @SerialName("member")
+    val member: DiscordMember? = null,
     val flags: Int? = null,
 )
 
@@ -52,6 +54,8 @@ data class DiscordGuildEmoji(
     val id: String? = null,
     val name: String? = null,
     val animated: Boolean = false,
+    @SerialName("guild_id")
+    val guildId: String? = null,
 )
 
 @Serializable

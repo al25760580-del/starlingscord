@@ -192,6 +192,13 @@ object DiscordToStoat {
         )
     }
 
+    /** Cache a Discord guild member's user object so the UI can resolve names. */
+    fun cacheMemberUser(member: DiscordMember?) {
+        val u = member?.user ?: return
+        val uid = u.id ?: return
+        StoatAPI.userCache[uid] = adaptUser(u) ?: return
+    }
+
     fun adaptMessage(m: DiscordMessage): Message? {
         val id = snowflakeToUlid(m.id) ?: return null
         val embeds = buildList {

@@ -81,6 +81,7 @@ import chat.stoat.composables.generic.RemoteImage
 import chat.stoat.composables.generic.UserAvatar
 import chat.stoat.composables.generic.UserAvatarWidthPlaceholder
 import chat.stoat.composables.markdown.prose.ChatMarkdown
+import chat.stoat.discord.DiscordAPI
 import chat.stoat.core.model.data.STOAT_FILES
 import chat.stoat.core.model.schemas.AutumnResource
 import chat.stoat.core.model.schemas.User
@@ -150,7 +151,15 @@ fun authorName(message: MessageSchema): String {
                 ?: stringResource(R.string.unknown)
 
     val member = message.author?.let { StoatAPI.members.getMember(serverId, it) }
-        ?: return stringResource(R.string.unknown)
+    if (member == null) {
+        // Discord: member objects aren't back-filled into StoatAPI.members,
+        // so fall back to the cached user object before "unknown".
+        if (DiscordAPI.isActive) {
+            return StoatAPI.userCache[message.author]?.let { User.resolveDefaultName(it) }
+                ?: stringResource(R.string.unknown)
+        }
+        return stringResource(R.string.unknown)
+    }
     return member.nickname
         ?: StoatAPI.userCache[message.author]?.let { User.resolveDefaultName(it) }
         ?: stringResource(R.string.unknown)

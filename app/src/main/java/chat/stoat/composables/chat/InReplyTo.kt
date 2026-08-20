@@ -1,6 +1,10 @@
 package chat.stoat.composables.chat
 
 import android.util.Log
+import chat.stoat.composables.markdown.prose.ChatMarkdown
+import chat.stoat.discord.DiscordAPI
+import chat.stoat.discord.DiscordToStoat
+import chat.stoat.discord.routes.DiscordHttp
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -62,7 +66,13 @@ fun InReplyTo(
     LaunchedEffect(messageId) {
         if (messageId !in StoatAPI.messageCache) {
             try {
-                StoatAPI.messageCache[messageId] = fetchSingleMessage(channelId, messageId)
+                val fetched = if (DiscordAPI.isActive) {
+                    DiscordHttp.fetchDiscordMessage(channelId, messageId)
+                        ?.let { DiscordToStoat.adaptMessage(it) }
+                } else {
+                    fetchSingleMessage(channelId, messageId)
+                }
+                if (fetched != null) StoatAPI.messageCache[messageId] = fetched
             } catch (e: CancellationException) {
                 // It's fine
             } catch (e: Exception) {
@@ -143,6 +153,13 @@ fun InReplyTo(
                         color = contentColor.copy(alpha = 0.7f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
+                    )
+                } else if (DiscordAPI.isActive) {
+                    ChatMarkdown(
+                        content = message.content!!,
+                        serverId = serverId,
+                        fontSizeMultiplier = 1f,
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 } else {
                     Text(

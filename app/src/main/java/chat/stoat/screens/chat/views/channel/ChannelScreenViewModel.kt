@@ -712,6 +712,7 @@ class ChannelScreenViewModel(
             dm.author?.id?.let { aid ->
                 StoatAPI.userCache.putIfAbsent(aid, DiscordToStoat.adaptUser(dm.author) ?: return@let)
             }
+            dm.member?.let { DiscordToStoat.cacheMemberUser(it) }
         }
         messages.forEach { m -> m.id?.let { StoatAPI.messageCache[it] = m } }
         return messages

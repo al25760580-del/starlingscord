@@ -167,6 +167,7 @@ object DiscordGateway {
                     // and banner -- none of which are present on the reduced
                     // guild shapes from READY or /users/@me/guilds.
                     DiscordToStoat.upsertServer(gid, guild, guild.channels ?: emptyList())
+                    guild.members?.forEach { DiscordToStoat.cacheMemberUser(it) }
                 }
             }
 
@@ -207,6 +208,7 @@ object DiscordGateway {
                 message.author?.id?.let { aid ->
                     StoatAPI.userCache.putIfAbsent(aid, DiscordToStoat.adaptUser(message.author) ?: return@let)
                 }
+                message.member?.let { DiscordToStoat.cacheMemberUser(it) }
                 adapted.id?.let { StoatAPI.messageCache[it] = adapted }
                 StoatAPI.wsFrameChannel.tryEmit(adapted)
             }

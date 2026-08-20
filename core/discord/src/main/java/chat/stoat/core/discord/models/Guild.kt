@@ -27,4 +27,22 @@ data class DiscordGuild(
     /** Present on the full guild object delivered by gateway GUILD_CREATE. */
     @SerialName("channels")
     val channels: List<DiscordChannel>? = null,
+
+    /** Present on the full guild object delivered by gateway GUILD_CREATE. */
+    @SerialName("members")
+    val members: List<DiscordMember>? = null,
+)
+
+/**
+ * Discord guild member as nested on gateway [DiscordGuild] payloads and on
+ * guild/text [DiscordMessage]s. [user] carries the account; [nick] is the
+ * guild-specific display name.
+ */
+@Serializable
+data class DiscordMember(
+    val user: DiscordUser? = null,
+    val nick: String? = null,
+    val roles: List<String>? = null,
+    @SerialName("joined_at")
+    val joinedAt: String? = null,
 )

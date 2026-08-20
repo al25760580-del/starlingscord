@@ -94,9 +94,19 @@ suspend fun HttpClient.fetchGuildEmojis(guildId: String): List<DiscordGuildEmoji
         DiscordJson.decodeFromString(
             ListSerializer(DiscordGuildEmoji.serializer()),
             response.bodyAsText(),
-        )
+        ).map { it.copy(guildId = guildId) }
     } catch (e: Exception) {
         emptyList()
+    }
+}
+
+/** Fetch a single Discord message by id (used to resolve uncached reply targets). */
+suspend fun HttpClient.fetchDiscordMessage(channelId: String, messageId: String): DiscordMessage? {
+    return try {
+        val response = get("$DISCORD_API/channels/$channelId/messages/$messageId")
+        DiscordJson.decodeFromString(DiscordMessage.serializer(), response.bodyAsText())
+    } catch (e: Exception) {
+        null
     }
 }
 

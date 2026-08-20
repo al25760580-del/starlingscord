@@ -1,6 +1,7 @@
 package chat.stoat.composables.emoji
 
 import android.util.TypedValue
+import chat.stoat.discord.DiscordAPI
 import android.view.HapticFeedbackConstants
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
@@ -182,7 +183,10 @@ fun EmojiPicker(
                 )
             )
 
-            is EmojiPickerItem.ServerEmote -> onEmojiSelected(":${it.emote.id}:")
+            is EmojiPickerItem.ServerEmote -> onEmojiSelected(
+                if (DiscordAPI.isActive) "<:${it.emote.name}:${it.emote.id}>"
+                else ":${it.emote.id}:"
+            )
             else -> {}
         }
     }
@@ -611,7 +615,11 @@ fun ColumnScope.PickerItem(
                     .clip(CircleShape)
                     .combinedClickable(
                         onClick = { onClick(item) },
-                        onLongClick = { item.emote.id?.let { onServerEmoteInfo(it) } }
+                        onLongClick = {
+                            if (!DiscordAPI.isActive) {
+                                item.emote.id?.let { onServerEmoteInfo(it) }
+                            }
+                        }
                     )
                     .aspectRatio(1f)
                     .weight(1f),
