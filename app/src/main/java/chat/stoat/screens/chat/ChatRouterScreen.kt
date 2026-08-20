@@ -430,7 +430,7 @@ fun ChatRouterScreen(
     }
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-        if (RealtimeSocket.disconnectionState == DisconnectionState.Disconnected) {
+        if (!DiscordAPI.isActive && RealtimeSocket.disconnectionState == DisconnectionState.Disconnected) {
             RealtimeSocket.updateDisconnectionState(DisconnectionState.Reconnecting)
             scope.launch { StoatAPI.connectWS() }
         }

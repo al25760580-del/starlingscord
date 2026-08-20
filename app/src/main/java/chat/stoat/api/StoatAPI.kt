@@ -9,6 +9,7 @@ import chat.stoat.api.internals.ActiveSlowmode
 import chat.stoat.api.internals.Members
 import chat.stoat.api.realtime.DisconnectionState
 import chat.stoat.api.realtime.RealtimeSocket
+import chat.stoat.discord.DiscordAPI
 import chat.stoat.api.routes.account.MFA_TICKET_HEADER_NAME
 import chat.stoat.api.routes.user.fetchSelf
 import chat.stoat.api.unreads.Unreads
@@ -194,6 +195,11 @@ object StoatAPI {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     suspend fun connectWS() {
+        // In full_backend (Discord) mode the Revolt websocket must never connect:
+        // it would issue Revolt requests and its READY payload would overwrite the
+        // Discord-populated caches, causing "channels/messages from Revolt" and
+        // breaking live updates. Discord drives realtime via DiscordGateway instead.
+        if (DiscordAPI.isActive) return
         socketCoroutine?.cancelAndJoin()
         RealtimeSocket.updateDisconnectionState(DisconnectionState.Reconnecting)
         val token = sessionToken
