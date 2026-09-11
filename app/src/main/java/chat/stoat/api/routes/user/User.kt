@@ -3,6 +3,8 @@ package chat.stoat.api.routes.user
 import android.util.Log
 import chat.stoat.api.StoatAPI
 import chat.stoat.api.internals.DiscordMappings
+import chat.stoat.api.internals.discordCdnUrl
+import chat.stoat.core.model.schemas.AutumnResource
 import chat.stoat.core.model.schemas.Profile
 import chat.stoat.core.model.schemas.Status
 import chat.stoat.core.model.schemas.User
@@ -10,6 +12,7 @@ import chat.stoat.api.realtime.DiscordGateway
 import chat.stoat.discord.DiscordHttp
 import chat.stoat.discord.DiscordJson
 import chat.stoat.discord.routes.fetchCurrentUser
+import chat.stoat.discord.routes.fetchProfile
 import chat.stoat.discord.routes.fetchUser
 import chat.stoat.discord.routes.patchCurrentUser
 import io.ktor.client.statement.bodyAsText
@@ -24,7 +27,12 @@ suspend fun fetchSelf(): User {
     val self = DiscordHttp.fetchCurrentUser()
         ?: throw Exception("Could not fetch self user (invalid token or network error)")
 
-    val user = DiscordMappings.adaptUser(self)
+    // Enrich with the profile endpoint (bio, pronouns, banner, badges):
+    // GET /users/@me/profile, per https://docs.discord.food/resources/user.
+    val profile = runCatching { DiscordHttp.fetchProfile(self.id ?: "@me") }
+        .getOrNull()
+
+    var user = DiscordMappings.adaptUser(self, profile)
         ?: User.getPlaceholder(self.id ?: "0")
 
     if (user.id == null) {
@@ -120,7 +128,18 @@ suspend fun addUserIfUnknown(id: String) {
 }
 
 suspend fun fetchUserProfile(id: String): Profile {
-    // Discord has no separate profile endpoint; the user object carries bio.
+    // GET /users/{user.id}/profile returns the profile metadata (bio, banner).
+    // https://docs.discord.food/resources/user#get-user-profile
+    val profile = runCatching { DiscordHttp.fetchProfile(id) }.getOrNull()
+    if (profile != null) {
+        return Profile(
+            content = profile.userProfile?.bio ?: profile.user?.bio,
+            background = profile.userProfile?.banner?.let { h ->
+                AutumnResource(id = discordCdnUrl("banners", id, h))
+            },
+        )
+    }
+    // Fallback to the bare user object (carries bio for self).
     val du = DiscordHttp.fetchUser(id)
     return Profile(content = du?.bio, background = null)
 }

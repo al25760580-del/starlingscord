@@ -278,10 +278,11 @@ class ChannelScreenViewModel(
         }
 
         val permission = Roles.permissionFor(channel!!, selfUser, selfMember)
-        // Discord-adapted channels carry no Revolt permission model, so the
-        // Revolt permission bit is always absent. Assume the user can send in
-        // text/DM/announcement channels; voice channels have no text composer.
-        val canSend = channel!!.channelType != ChannelType.VoiceChannel
+        // Real Discord permission check: SEND_MESSAGES (implicit VIEW_CHANNEL
+        // denial is respected by the calculator). Voice channels have no text
+        // composer at all.
+        val canSend = channel!!.channelType != ChannelType.VoiceChannel &&
+                permission.has(PermissionBit.SendMessage)
 
         val partnerId = ChannelUtils.resolveDMPartner(channel!!)
 

@@ -15,6 +15,10 @@ import chat.stoat.core.discord.models.DiscordUser
 import chat.stoat.core.discord.models.GatewayReady
 import chat.stoat.core.model.schemas.AutumnResource
 import chat.stoat.core.model.schemas.Category
+import chat.stoat.core.discord.models.DiscordRole
+import chat.stoat.core.model.schemas.Profile
+import chat.stoat.core.model.schemas.Role
+import chat.stoat.core.discord.models.DiscordUserProfile
 import chat.stoat.core.model.schemas.Channel
 import chat.stoat.core.model.schemas.ChannelType
 import chat.stoat.core.model.schemas.Emoji
@@ -27,12 +31,15 @@ import chat.stoat.core.model.schemas.Server
 import chat.stoat.core.model.schemas.ServerUserChoice
 import chat.stoat.core.model.schemas.ServerWithChannelObjects
 import chat.stoat.core.model.schemas.User
+import chat.stoat.core.model.schemas.UserBadges
 import chat.stoat.discord.DiscordAPI
 import chat.stoat.discord.DiscordHttp
 import chat.stoat.discord.routes.fetchDMs
 import chat.stoat.discord.routes.fetchGuildChannels
 import chat.stoat.discord.routes.fetchGuildEmojis
+import chat.stoat.discord.routes.fetchGuildRoles
 import chat.stoat.discord.routes.fetchGuilds
+import chat.stoat.discord.routes.fetchSelfGuildMember
 
 /**
  * Response mappers for the Discord backend.
@@ -87,18 +94,51 @@ object DiscordMappings {
     fun ulidForRequest(snowflake: String): String? =
         DiscordAPI.idMap.entries.firstOrNull { it.value == snowflake }?.key
 
-    fun adaptUser(u: DiscordUser?): User? {
+    fun adaptUser(u: DiscordUser?, profile: DiscordUserProfile? = null): User? {
         // Bind the cross-module nullable id to a local so it can be safely
         // smart-cast to non-null String (public API props in another module
         // cannot be smart-cast directly).
         val uid = u?.id ?: return null
+        val meta = profile?.userProfile
         return User(
             id = uid,
             username = u.username,
             displayName = u.globalName,
             discriminator = u.discriminator,
             avatar = u.avatar?.let { h -> AutumnResource(id = discordCdnUrl("avatars", uid, h)) },
-            badges = u.publicFlags?.toLong(),
+            badges = legacyBadgesFromPublicFlags(u.publicFlags),
+            pronouns = meta?.pronouns,
+            profile = Profile(
+                content = meta?.bio ?: u.bio,
+                background = (meta?.banner ?: u.banner)?.let { h ->
+                    AutumnResource(id = discordCdnUrl("banners", uid, h))
+                },
+            ),
+        )
+    }
+
+    /**
+     * Maps a Discord role onto the app's [Role] model and registers the raw
+     * permission bits in [DiscordAPI.roleCache] for the permission calculator.
+     * Discord role positions grow upwards; the app's rank shrinks upwards, so
+     * position is negated. The @everyone role's ID equals the guild's ID.
+     */
+    fun adaptRole(r: DiscordRole): Role? {
+        val rid = r.id ?: return null
+        DiscordAPI.roleCache[rid] = r
+        val colourInt = r.colors?.primaryColor ?: r.color ?: 0L
+        return Role(
+            name = r.name,
+            colour = if (colourInt != 0L) {
+                String.format("#%06X", colourInt and 0xFFFFFF)
+            } else {
+                null
+            },
+            hoist = r.hoist,
+            rank = -(r.position ?: 0).toDouble(),
+            icon = r.icon?.let { h ->
+                AutumnResource(id = "https://cdn.discordapp.com/role-icons/$rid/$h.png")
+            },
         )
     }
 
@@ -152,6 +192,11 @@ object DiscordMappings {
      */
     fun upsertServer(gid: String, guild: DiscordGuild, rawChannels: List<DiscordChannel>) {
         val listable = rawChannels.filter { isListableChannel(it.type) }
+        // Keep the raw channel objects (with permission overwrites) around for
+        // the permission calculator.
+        rawChannels.forEach { ch -> ch.id?.let { DiscordAPI.channelCache[it] = ch } }
+        // /users/@me/guilds carries the computed base permissions for the user.
+        guild.permissions?.toLongOrNull()?.let { DiscordAPI.guildPermissions[gid] = it }
         listable.forEach { ch -> ch.id?.let { StoatAPI.channelCache[it] = adaptChannel(ch) } }
 
         val categories = rawChannels.filter { it.type == DiscordChannelType.GUILD_CATEGORY }
@@ -182,6 +227,17 @@ object DiscordMappings {
 
         val existing = StoatAPI.serverCache[gid]
         val base = existing ?: Server(id = gid)
+
+        // Roles: adapted into the app model (colours, hoist, rank, icon) and
+        // registered raw for permission computation.
+        val rolesMap = buildMap {
+            guild.roles?.forEach { r ->
+                r.id?.let { rid -> adaptRole(r)?.let { adapted -> put(rid, adapted) } }
+            }
+            // Preserve roles already cached from a previous payload.
+            base.roles?.forEach { (rid, role) -> if (!containsKey(rid)) put(rid, role) }
+        }
+
         StoatAPI.serverCache[gid] = Server(
             id = gid,
             owner = guild.ownerId ?: base.owner,
@@ -189,10 +245,50 @@ object DiscordMappings {
             description = guild.description ?: base.description,
             channels = if (topLevel.isNotEmpty()) topLevel else base.channels,
             categories = if (uiCategories.isNotEmpty()) uiCategories else base.categories,
+            roles = if (rolesMap.isNotEmpty()) rolesMap else base.roles,
             icon = guild.icon?.let { h -> AutumnResource(id = discordCdnUrl("icons", gid, h)) }
                 ?: base.icon,
             banner = guild.banner?.let { h -> AutumnResource(id = discordCdnUrl("banners", gid, h)) }
                 ?: base.banner,
+        )
+
+        // Hide channels the user cannot view (VIEW_CHANNEL), now that roles,
+        // raw channels and guild permissions are all in place.
+        refilterServerChannelVisibility(gid)
+    }
+
+    /**
+     * Re-applies the VIEW_CHANNEL filter to a cached server's channel list.
+     * Runs after every upsert (and after the self member arrives) so channels
+     * hidden by overwrites disappear once permission data is available.
+     */
+    fun refilterServerChannelVisibility(gid: String) {
+        val server = StoatAPI.serverCache[gid] ?: return
+        val uid = DiscordAPI.selfId ?: return
+        val base = Roles.guildBasePermissions(gid, uid)
+        // No permission data yet (or admin/owner): keep everything visible.
+        if (base == 0L || base has PermissionBit.Administrator) return
+
+        fun visible(id: String): Boolean {
+            val channel = StoatAPI.channelCache[id] ?: return true
+            return Roles.permissionFor(channel, User(id = uid), null) has PermissionBit.ViewChannel
+        }
+
+        val filteredChannels = server.channels?.filter(::visible) ?: return
+        val filteredCategories = server.categories
+            ?.mapNotNull { cat ->
+                val kept = cat.channels?.filter(::visible) ?: return@mapNotNull null
+                if (kept.isEmpty()) null else cat.copy(channels = kept)
+            }
+            ?: return
+
+        if (filteredChannels.size == server.channels?.size &&
+            filteredCategories.size == server.categories?.size
+        ) return // nothing changed
+
+        StoatAPI.serverCache[gid] = server.copy(
+            channels = filteredChannels,
+            categories = filteredCategories,
         )
     }
 
@@ -211,7 +307,7 @@ object DiscordMappings {
             joinedAt = m.joinedAt,
             nickname = m.nick,
             roles = m.roles,
-            avatar = m.user?.avatar?.let { h ->
+            avatar = (m.avatar ?: m.user?.avatar)?.let { h ->
                 AutumnResource(id = discordCdnUrl("avatars", uid, h))
             },
         )
@@ -333,6 +429,8 @@ object DiscordMappings {
             val channels = runCatching { DiscordHttp.fetchGuildChannels(gid) }
                 .getOrElse { emptyList() }
             upsertServer(gid, guild, channels)
+            hydrateSelfMember(gid)
+            hydrateGuildRoles(gid, guild.roles)
             runCatching { DiscordHttp.fetchGuildEmojis(gid) }
                 .getOrElse { emptyList() }
                 .forEach { e -> e.id?.let { DiscordAPI.emojiCache[it] = e } }
@@ -357,6 +455,8 @@ object DiscordMappings {
                 val channels = runCatching { DiscordHttp.fetchGuildChannels(gid) }
                     .getOrElse { emptyList() }
                 upsertServer(gid, guild, channels)
+                hydrateSelfMember(gid)
+                hydrateGuildRoles(gid, guild.roles)
                 runCatching { DiscordHttp.fetchGuildEmojis(gid) }
                     .getOrElse { emptyList() }
                     .forEach { e -> e.id?.let { DiscordAPI.emojiCache[it] = e } }
@@ -371,6 +471,66 @@ object DiscordMappings {
             Log.e("DiscordMappings", "populateFromRest failed", it)
         }
     }
+
+    /**
+     * Fetches and caches the logged-in user's own member object (role IDs,
+     * nickname, timeout state) for a guild, then re-runs the channel
+     * visibility filter with the fresh roles.
+     */
+    suspend fun hydrateSelfMember(gid: String) {
+        runCatching {
+            val sm = DiscordHttp.fetchSelfGuildMember(gid) ?: return@runCatching
+            DiscordAPI.selfMembers[gid] = sm
+            adaptMember(gid, sm)?.let { StoatAPI.members.setMember(gid, it) }
+            refilterServerChannelVisibility(gid)
+        }.onFailure { Log.w("DiscordMappings", "hydrateSelfMember($gid) failed", it) }
+    }
+
+    /**
+     * If no roles arrived with the guild payload, fetches them via REST
+     * (`GET /guilds/{id}/roles`) and re-runs the visibility filter.
+     */
+    suspend fun hydrateGuildRoles(gid: String, existing: List<DiscordRole>?) {
+        if (!existing.isNullOrEmpty()) return
+        runCatching {
+            val roles = DiscordHttp.fetchGuildRoles(gid)
+            if (roles.isEmpty()) return@runCatching
+            val server = StoatAPI.serverCache[gid] ?: return@runCatching
+            val rolesMap = buildMap {
+                roles.forEach { r ->
+                    r.id?.let { rid -> adaptRole(r)?.let { adapted -> put(rid, adapted) } }
+                }
+                server.roles?.forEach { (rid, role) -> if (!containsKey(rid)) put(rid, role) }
+            }
+            StoatAPI.serverCache[gid] = server.copy(roles = rolesMap)
+            refilterServerChannelVisibility(gid)
+        }.onFailure { Log.w("DiscordMappings", "hydrateGuildRoles($gid) failed", it) }
+    }
+}
+
+/**
+ * Translates Discord `public_flags` user badges onto the app's badge enum
+ * (which speaks the legacy vocabulary), so the badge row in profile sheets
+ * shows meaningful icons instead of mismatched bits.
+ *
+ * Discord bits: https://docs.discord.food/resources/user#user-flags
+ */
+private fun legacyBadgesFromPublicFlags(flags: Int?): Long {
+    if (flags == null) return 0L
+    fun has(bit: Int) = (flags shr bit) and 1 == 1
+
+    var out = 0L
+    // Staff -> platform team; Partner -> founder; HypeSquad events -> supporter.
+    if (has(0)) out = out or UserBadges.PlatformModeration.value
+    if (has(1)) out = out or UserBadges.Founder.value
+    if (has(2)) out = out or UserBadges.Supporter.value
+    // Bug Hunter (levels 1 and 2) -> responsible disclosure.
+    if (has(3) || has(16)) out = out or UserBadges.ResponsibleDisclosure.value
+    // Early Supporter -> early adopter.
+    if (has(11)) out = out or UserBadges.EarlyAdopter.value
+    // Verified Bot Developer / Active Developer -> developer.
+    if (has(17) || has(18)) out = out or UserBadges.Developer.value
+    return out
 }
 
 /**

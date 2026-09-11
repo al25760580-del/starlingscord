@@ -329,7 +329,9 @@ fun ChatMarkdown(
 
                 ROLE_MENTION_ELEMENT_TYPE -> {
                     val raw = child.getTextInNode(content).toString()
-                    val roleId = raw.substring(2, raw.length - 1)
+                    // `<@&id>` leaves the '&' after stripping `<@` + `>`.
+                    var roleId = raw.substring(2, raw.length - 1)
+                    if (roleId.startsWith("&")) roleId = roleId.substring(1)
                     // Discord role ids are decimal snowflakes, not ULIDs, so look
                     // the role up regardless of id format.
                     val role = serverId?.let { StoatAPI.serverCache[it]?.roles?.get(roleId) }

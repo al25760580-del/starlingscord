@@ -6,6 +6,8 @@ import android.util.Log
 import androidx.compose.runtime.mutableStateMapOf
 import chat.stoat.BuildConfig
 import chat.stoat.core.discord.models.DiscordChannel
+import chat.stoat.core.discord.models.DiscordRole
+import chat.stoat.core.discord.models.DiscordMember
 import chat.stoat.core.discord.models.DiscordGuild
 import chat.stoat.core.discord.models.DiscordGuildEmoji
 import chat.stoat.core.discord.models.DiscordMessage
@@ -124,6 +126,15 @@ object DiscordAPI {
     val emojiCache = mutableStateMapOf<String, DiscordGuildEmoji>()
     val dmCache = mutableStateMapOf<String, DiscordChannel>()
 
+    /** Guild roles by role ID (snowflakes are globally unique). */
+    val roleCache = mutableStateMapOf<String, DiscordRole>()
+
+    /** Base permissions for the logged-in user per guild (from /users/@me/guilds). */
+    val guildPermissions = mutableMapOf<String, Long>()
+
+    /** The logged-in user's own guild member object (carrying role IDs) per guild. */
+    val selfMembers = mutableStateMapOf<String, DiscordMember>()
+
     fun setSessionToken(token: String) {
         sessionToken = token
     }
@@ -147,5 +158,8 @@ object DiscordAPI {
         messageCache.clear()
         emojiCache.clear()
         dmCache.clear()
+        roleCache.clear()
+        guildPermissions.clear()
+        selfMembers.clear()
     }
 }

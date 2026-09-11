@@ -181,11 +181,22 @@ object DiscordGateway {
                 )
                 guild.id?.let { gid ->
                     DiscordAPI.guildCache[gid] = guild
-                    // The full guild object carries channels (incl. categories)
-                    // and banner -- none of which are present on the reduced
-                    // guild shapes from READY or /users/@me/guilds.
+                    // The full guild object carries channels (incl. categories),
+                    // banner, roles and members -- none of which are present on
+                    // the reduced guild shapes from READY or /users/@me/guilds.
                     DiscordMappings.upsertServer(gid, guild, guild.channels ?: emptyList())
-                    guild.members?.forEach { DiscordMappings.cacheMemberUser(it) }
+                    guild.members?.forEach { m ->
+                        DiscordMappings.cacheMemberUser(m)
+                        DiscordMappings.adaptMember(gid, m)?.let { adapted ->
+                            if (adapted.id != null) {
+                                StoatAPI.members.setMember(gid, adapted)
+                            }
+                        }
+                        if (m.user?.id == DiscordAPI.selfId) {
+                            DiscordAPI.selfMembers[gid] = m
+                            DiscordMappings.refilterServerChannelVisibility(gid)
+                        }
+                    }
                 }
             }
 
