@@ -60,7 +60,9 @@ private fun DiscordInviteResponse.toInvite(): Invite {
             guild.icon?.let { h -> AutumnResource(id = discordCdnUrl("icons", gid, h)) }
         },
         serverBanner = guild?.id?.let { gid ->
-            guild.banner?.let { h -> AutumnResource(id = discordCdnUrl("banners", gid, h)) }
+            guild.banner?.let { h ->
+                AutumnResource(id = discordCdnUrl("banners", gid, h, size = 2048))
+            }
         },
         channelId = channel?.id,
         channelName = channel?.name,

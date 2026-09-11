@@ -36,6 +36,9 @@ data class DiscordGuild(
     @SerialName("roles")
     val roles: List<DiscordRole>? = null,
 
+    /** Present on the full guild object (GUILD_CREATE, GET /guilds/{id}). */
+    val emojis: List<DiscordGuildEmoji>? = null,
+
     /** Total permissions for the requesting user, excluding channel overwrites. */
     val permissions: String? = null,
 

@@ -45,6 +45,7 @@ import chat.stoat.api.internals.ULID
 import chat.stoat.api.internals.solidColor
 import chat.stoat.api.internals.DiscordMappings
 import chat.stoat.api.routes.user.fetchUserProfile
+import chat.stoat.api.routes.server.fetchMember
 import chat.stoat.api.settings.Experiments
 import chat.stoat.api.settings.FeatureFlags
 import chat.stoat.composables.chat.RoleListEntry
@@ -68,7 +69,20 @@ fun UserInfoSheet(
 ) {
     val user = StoatAPI.userCache[userId]
 
-    val member = serverId?.let { StoatAPI.members.getMember(it, userId) }
+    // The member (roles/nickname) is not always cached when opening the sheet
+    // (e.g. users whose messages were loaded via REST history); fetch it.
+    var member by remember(serverId, userId) {
+        mutableStateOf(serverId?.let { StoatAPI.members.getMember(it, userId) })
+    }
+    LaunchedEffect(serverId, userId) {
+        if (serverId != null && member == null) {
+            try {
+                member = fetchMember(serverId, userId)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
 
     val server = StoatAPI.serverCache[serverId]
 
@@ -226,9 +240,9 @@ fun UserInfoSheet(
                 ).toString()
             }
         }
-        val joinedAt = member?.joinedAt?.let {
+        val joinedAt = member?.joinedAt?.let { joined ->
             DateUtils.getRelativeTimeSpanString(
-                Instant.parse(member.joinedAt!!).toEpochMilliseconds(),
+                Instant.parse(joined).toEpochMilliseconds(),
                 System.currentTimeMillis(),
                 DateUtils.MINUTE_IN_MILLIS
             ).toString()

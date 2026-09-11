@@ -68,10 +68,22 @@ object DiscordMappings {
         }
     }
 
-    /** Convert a Discord snowflake to a ULID (used for message ids). */
+    /**
+     * Convert a Discord snowflake to a ULID (used for message ids).
+     *
+     * The ULID is DETERMINISTIC: its entropy bytes are the big-endian
+     * snowflake itself, so the same snowflake always maps to the same ULID.
+     * This keeps reply references, message cache keys and idMap round-trips
+     * consistent no matter which code path adapted the message.
+     */
     fun snowflakeToUlid(snowflake: String?): String? {
         val ts = snowflakeTimestamp(snowflake) ?: return null
-        return ULID.makeSpecial(ts)
+        val sf = snowflake?.toLongOrNull() ?: return null
+        val entropy = ByteArray(10)
+        for (i in 0 until 8) {
+            entropy[i] = (sf ushr (8 * (7 - i))).toByte()
+        }
+        return runCatching { ULID.makeSpecial(ts, entropy) }.getOrNull()
     }
 
     /**
@@ -111,7 +123,7 @@ object DiscordMappings {
             profile = Profile(
                 content = meta?.bio ?: u.bio,
                 background = (meta?.banner ?: u.banner)?.let { h ->
-                    AutumnResource(id = discordCdnUrl("banners", uid, h))
+                    AutumnResource(id = discordCdnUrl("banners", uid, h, size = 2048))
                 },
             ),
         )
@@ -248,8 +260,9 @@ object DiscordMappings {
             roles = if (rolesMap.isNotEmpty()) rolesMap else base.roles,
             icon = guild.icon?.let { h -> AutumnResource(id = discordCdnUrl("icons", gid, h)) }
                 ?: base.icon,
-            banner = guild.banner?.let { h -> AutumnResource(id = discordCdnUrl("banners", gid, h)) }
-                ?: base.banner,
+            banner = guild.banner?.let { h ->
+                AutumnResource(id = discordCdnUrl("banners", gid, h, size = 2048))
+            } ?: base.banner,
         )
 
         // Hide channels the user cannot view (VIEW_CHANNEL), now that roles,
@@ -371,6 +384,13 @@ object DiscordMappings {
             reactions = m.reactions?.let { mapDiscordReactions(it) },
         )
         m.id?.let { DiscordAPI.idMap[id] = it }
+
+        // Register the replied-to message's snowflake under its (deterministic)
+        // ULID so InReplyTo can round-trip the id even when the referenced
+        // message itself has never been cached.
+        m.messageReference?.messageId?.let { refSf ->
+            snowflakeToUlid(refSf)?.let { refUlid -> DiscordAPI.idMap[refUlid] = refSf }
+        }
 
         // Cache the referenced (replied-to) message so the InReplyTo preview can
         // resolve it directly from StoatAPI.messageCache.
@@ -541,6 +561,9 @@ private fun legacyBadgesFromPublicFlags(flags: Int?): Long {
  * we always request `.png`. This keeps avatars / server icons / banners
  * rendering. e.g. https://cdn.discordapp.com/avatars/{user_id}/{hash}.png
  */
-internal fun discordCdnUrl(kind: String, id: String, hash: String): String {
-    return "https://cdn.discordapp.com/$kind/$id/$hash.png"
+internal fun discordCdnUrl(kind: String, id: String, hash: String, size: Int? = null): String {
+    val base = "https://cdn.discordapp.com/$kind/$id/$hash.png"
+    // Without ?size=N the CDN serves banners at 600x240, which looks blurry
+    // when stretched full-width. Powers of two, 16..4096, are accepted.
+    return if (size != null) "$base?size=$size" else base
 }

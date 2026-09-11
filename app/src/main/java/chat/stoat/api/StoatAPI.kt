@@ -21,6 +21,7 @@ import chat.stoat.core.model.schemas.User
 import chat.stoat.core.model.util.ChannelVoiceState
 import chat.stoat.discord.DiscordAPI
 import chat.stoat.discord.DiscordHttp
+import chat.stoat.discord.routes.fetchFingerprint
 import chat.stoat.persistence.Database
 import chat.stoat.persistence.SqlStorage
 import com.chuckerteam.chucker.api.ChuckerCollector
@@ -174,6 +175,14 @@ object StoatAPI {
     suspend fun initialize() {
         if (sessionToken != "") {
             fetchSelf()
+            // The X-Fingerprint header (fetched anonymously via /experiments)
+            // is part of looking like a first-party client; without it Discord
+            // can flag the account as automated.
+            if (DiscordAPI.fingerprint == null) {
+                runCatching {
+                    DiscordHttp.fetchFingerprint()?.also { DiscordAPI.setFingerprint(it) }
+                }
+            }
         }
     }
 

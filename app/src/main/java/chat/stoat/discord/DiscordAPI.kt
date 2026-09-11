@@ -43,11 +43,19 @@ val DiscordJson = Json {
 }
 
 /**
- * Encodes the standard client "super properties" that Discord expects on every
- * request. Mirrors what the official client sends (base64-encoded JSON).
+ * Encodes the "super properties" Discord expects on every request, matching
+ * the official Android client's shape
+ * (https://docs.discord.food/reference#client-properties). A non-standard
+ * browser/device string or a missing client_build_number is one of the
+ * signals Discord uses to flag automated ("self-bot") accounts.
  */
+private val clientLaunchId: String = java.util.UUID.randomUUID().toString()
+private val heartbeatSessionId: String = java.util.UUID.randomUUID().toString()
+private val launchSignature: String = System.nanoTime().toString()
+private val deviceVendorId: String = java.util.UUID.randomUUID().toString()
+
 private fun buildSuperProperties(): String {
-    val json = """{"os":"Android","browser":"Stoat","device":"Stoat","system_locale":"en-US","release_channel":"googleplay","client_version":"${BuildConfig.VERSION_NAME}","os_version":"${Build.VERSION.RELEASE}","os_arch":"arm","app_arch":"arm","platform":"Android"}"""
+    val json = """{"os":"Android","browser":"Discord Android","device":"${Build.MODEL}","system_locale":"${java.util.Locale.getDefault().toLanguageTag()}","has_client_mods":false,"client_version":"280.2 - rn","release_channel":"googleplay","device_vendor_id":"$deviceVendorId","design_id":2,"browser_user_agent":"","browser_version":"","os_version":"${Build.VERSION.SDK_INT}","client_build_number":4025,"client_event_source":null,"client_launch_id":"$clientLaunchId","launch_signature":"$launchSignature","client_heartbeat_session_id":"$heartbeatSessionId"}"""
     return Base64.encodeToString(json.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
 }
 
@@ -70,7 +78,10 @@ val DiscordHttp = HttpClient(OkHttp) {
     engine {
         addInterceptor { chain ->
             val request = with(chain.request().newBuilder()) {
-                header("User-Agent", "StoatForAndroid/${BuildConfig.VERSION_NAME} Discord")
+                // The official Android client's User-Agent; a custom one is a
+                // self-bot signal. 280202 = client_version 280.2, RNA = React
+                // Native Android.
+                header("User-Agent", "Discord-Android/280202;RNA")
                 header("X-Super-Properties", buildSuperProperties())
                 DiscordAPI.fingerprint?.let { header("X-Fingerprint", it) }
                 if (DiscordAPI.sessionToken.isNotBlank()) {

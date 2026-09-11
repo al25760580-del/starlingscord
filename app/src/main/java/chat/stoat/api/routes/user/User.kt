@@ -135,7 +135,7 @@ suspend fun fetchUserProfile(id: String): Profile {
         return Profile(
             content = profile.userProfile?.bio ?: profile.user?.bio,
             background = profile.userProfile?.banner?.let { h ->
-                AutumnResource(id = discordCdnUrl("banners", id, h))
+                AutumnResource(id = discordCdnUrl("banners", id, h, size = 2048))
             },
         )
     }

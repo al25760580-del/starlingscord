@@ -197,6 +197,12 @@ object DiscordGateway {
                             DiscordMappings.refilterServerChannelVisibility(gid)
                         }
                     }
+                    // The full guild object also carries the guild's custom
+                    // emojis; cache them so the emoji picker has them without
+                    // an extra REST round-trip per guild.
+                    guild.emojis?.forEach { e ->
+                        e.id?.let { eid -> DiscordAPI.emojiCache[eid] = e.copy(guildId = gid) }
+                    }
                 }
             }
 
@@ -321,7 +327,7 @@ object DiscordGateway {
         val identify = GatewayIdentify(
             d = IdentifyData(
                 token = token,
-                properties = IdentifyProperties(),
+                properties = IdentifyProperties(device = android.os.Build.MODEL),
                 compress = false,
                 capabilities = 16381,
                 presence = PresenceData(

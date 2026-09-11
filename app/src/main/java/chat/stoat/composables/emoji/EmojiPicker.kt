@@ -85,8 +85,11 @@ fun EmojiPicker(
     val focusManager = LocalFocusManager.current
 
     val emojiImpl = remember { EmojiImpl() }
-    val pickerList = remember(emojiImpl) { emojiImpl.flatPickerList() }
-    val servers = remember(emojiImpl) { emojiImpl.serversWithEmotes() }
+    // Keyed on the emoji cache size so the server sections appear as soon as
+    // the guild emojis finish loading, instead of staying frozen empty.
+    val emojiCacheSize = DiscordAPI.emojiCache.size
+    val pickerList = remember(emojiImpl, emojiCacheSize) { emojiImpl.flatPickerList() }
+    val servers = remember(emojiImpl, emojiCacheSize) { emojiImpl.serversWithEmotes() }
     val categorySpans = remember(pickerList) { emojiImpl.categorySpans(pickerList) }
 
     val gridState = rememberLazyGridState()
