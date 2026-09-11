@@ -1,16 +1,15 @@
 package chat.stoat.api.routes.custom
 
-import chat.stoat.api.StoatHttp
-import chat.stoat.api.StoatJson
-import chat.stoat.api.api
+import chat.stoat.api.internals.DiscordMappings
 import chat.stoat.core.model.schemas.Emoji
-import io.ktor.client.request.get
-import io.ktor.client.statement.bodyAsText
+import chat.stoat.discord.DiscordAPI
 
+/**
+ * Resolves an emoji by id from the guild-emoji cache filled at login / from
+ * gateway GUILD_CREATE payloads.
+ */
 suspend fun fetchEmoji(id: String): Emoji {
-    val response = StoatHttp.get("/custom/emoji/$id".api()).bodyAsText()
-    return StoatJson.decodeFromString(
-        Emoji.serializer(),
-        response
-    )
+    val cached = DiscordAPI.emojiCache[id]
+        ?: return Emoji(id = id, name = "emoji")
+    return DiscordMappings.adaptEmoji(cached, cached.guildId)
 }

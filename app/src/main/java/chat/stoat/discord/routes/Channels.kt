@@ -124,3 +124,11 @@ suspend fun HttpClient.unreactDiscord(channelId: String, messageId: String, emoj
     val enc = java.net.URLEncoder.encode(identifier, "UTF-8").replace("+", "%20")
     delete("$DISCORD_API/channels/$channelId/messages/$messageId/reactions/$enc/@me")
 }
+
+/**
+ * Fires a typing indicator in a channel. Discord typing indicators expire
+ * server-side after a few seconds; there is no "stop typing" call.
+ */
+suspend fun HttpClient.triggerTyping(channelId: String) {
+    post("$DISCORD_API/channels/$channelId/typing")
+}

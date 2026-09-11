@@ -1,9 +1,16 @@
-package chat.stoat.discord.realtime
+package chat.stoat.api.realtime
 
+import android.util.Log
+import chat.stoat.api.StoatAPI
+import chat.stoat.api.StoatJson
+import chat.stoat.api.internals.DiscordMappings
+import chat.stoat.api.realtime.frames.receivable.ChannelStartTypingFrame
+import chat.stoat.api.realtime.frames.receivable.MessageDeleteFrame
+import chat.stoat.api.realtime.frames.receivable.MessageUpdateFrame
+import chat.stoat.core.discord.models.ClientState
 import chat.stoat.core.discord.models.DiscordChannel
 import chat.stoat.core.discord.models.DiscordGuild
 import chat.stoat.core.discord.models.DiscordMessage
-import chat.stoat.core.discord.models.DiscordUser
 import chat.stoat.core.discord.models.GatewayHello
 import chat.stoat.core.discord.models.GatewayIdentify
 import chat.stoat.core.discord.models.GatewayPayload
@@ -11,13 +18,11 @@ import chat.stoat.core.discord.models.GatewayReady
 import chat.stoat.core.discord.models.IdentifyData
 import chat.stoat.core.discord.models.IdentifyProperties
 import chat.stoat.core.discord.models.PresenceData
-import chat.stoat.core.discord.models.ClientState
-import chat.stoat.api.StoatAPI
+import chat.stoat.core.model.schemas.Message
 import chat.stoat.discord.DISCORD_GATEWAY
+import chat.stoat.discord.DiscordAPI
 import chat.stoat.discord.DiscordHttp
 import chat.stoat.discord.DiscordJson
-import chat.stoat.discord.DiscordAPI
-import chat.stoat.discord.DiscordToStoat
 import io.ktor.client.plugins.websocket.ws
 import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
@@ -34,16 +39,21 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
-import android.util.Log
 
 /**
- * Discord gateway client, mirroring [chat.stoat.api.realtime.RealtimeSocket].
+ * The app's realtime transport: the Discord gateway websocket.
  *
- * Handles the HELLO -> IDENTIFY -> READY handshake, heartbeats and a handful of
- * the most important dispatch events (guilds, channels, messages). The connection
- * is long-lived and is launched from [chat.stoat.discord.DiscordAPI.startSocketOps].
+ * Handles the HELLO -> IDENTIFY -> READY handshake, heartbeats and the most
+ * important dispatch events (guilds, channels, messages), keeping the
+ * [StoatAPI] caches up to date and pushing incoming messages through
+ * [StoatAPI.wsFrameChannel] so the existing UI renders them live.
+ *
+ * The connection is long-lived and is launched from [StoatAPI.connectWS].
  */
 object DiscordGateway {
     var socket: WebSocketSession? = null
@@ -55,7 +65,12 @@ object DiscordGateway {
     @Volatile
     private var heartbeatIntervalMs: Long = 0
 
-    suspend fun connect(token: String) {
+    @Volatile
+    private var onReadyCallback: (() -> Unit)? = null
+
+    suspend fun connect(token: String, onReady: (() -> Unit)? = null) {
+        onReadyCallback = onReady
+        RealtimeSocket.updateDisconnectionState(DisconnectionState.Reconnecting)
         DiscordHttp.ws(DISCORD_GATEWAY) {
             socket = this
             var heartbeatJob: Job? = null
@@ -109,6 +124,7 @@ object DiscordGateway {
                 heartbeatJob?.cancel()
                 socket = null
                 DiscordAPI.connected = false
+                RealtimeSocket.updateDisconnectionState(DisconnectionState.Disconnected)
                 // Capture the close reason so we can see WHY Discord dropped the
                 // connection (e.g. 4004 auth failed, 4012 invalid api version).
                 // Ktor does not surface the close frame as a Frame.Close in the
@@ -148,11 +164,13 @@ object DiscordGateway {
                 ready.user?.let { u -> u.id?.let { DiscordAPI.userCache[it] = u } }
                 ready.guilds?.forEach { g -> g.id?.let { DiscordAPI.guildCache[it] = g } }
                 ready.privateChannels?.forEach { c -> c.id?.let { DiscordAPI.dmCache[it] = c } }
-                // Feed Stoat's existing UI caches (servers, channels, users, self)
+                // Populate the shared caches (servers, channels, users, self)
                 // so every screen renders Discord data.
-                DiscordToStoat.populateFromReady(ready)
+                DiscordMappings.populateFromReady(ready)
                 DiscordAPI.connected = true
                 DiscordAPI.connectionError = null
+                RealtimeSocket.updateDisconnectionState(DisconnectionState.Connected)
+                onReadyCallback?.invoke()
                 Log.i("DiscordGateway", "READY received for user ${ready.user?.id}")
             }
 
@@ -166,8 +184,8 @@ object DiscordGateway {
                     // The full guild object carries channels (incl. categories)
                     // and banner -- none of which are present on the reduced
                     // guild shapes from READY or /users/@me/guilds.
-                    DiscordToStoat.upsertServer(gid, guild, guild.channels ?: emptyList())
-                    guild.members?.forEach { DiscordToStoat.cacheMemberUser(it) }
+                    DiscordMappings.upsertServer(gid, guild, guild.channels ?: emptyList())
+                    guild.members?.forEach { DiscordMappings.cacheMemberUser(it) }
                 }
             }
 
@@ -176,7 +194,10 @@ object DiscordGateway {
                     DiscordGuild.serializer(),
                     payload.d!!,
                 )
-                guild.id?.let { DiscordAPI.guildCache.remove(it) }
+                guild.id?.let { gid ->
+                    DiscordAPI.guildCache.remove(gid)
+                    StoatAPI.serverCache.remove(gid)
+                }
             }
 
             "CHANNEL_CREATE" -> {
@@ -184,7 +205,10 @@ object DiscordGateway {
                     DiscordChannel.serializer(),
                     payload.d!!,
                 )
-                channel.id?.let { DiscordAPI.channelCache[it] = channel }
+                channel.id?.let { cid ->
+                    DiscordAPI.channelCache[cid] = channel
+                    StoatAPI.channelCache[cid] = DiscordMappings.adaptChannel(channel)
+                }
             }
 
             "CHANNEL_DELETE" -> {
@@ -192,7 +216,11 @@ object DiscordGateway {
                     DiscordChannel.serializer(),
                     payload.d!!,
                 )
-                channel.id?.let { DiscordAPI.channelCache.remove(it) }
+                channel.id?.let { cid ->
+                    DiscordAPI.channelCache.remove(cid)
+                    DiscordAPI.dmCache.remove(cid)
+                    StoatAPI.channelCache.remove(cid)
+                }
             }
 
             "MESSAGE_CREATE" -> {
@@ -201,14 +229,17 @@ object DiscordGateway {
                     payload.d!!,
                 )
                 message.id?.let { DiscordAPI.messageCache[it] = message }
-                // Adapt into a Revolt-shaped Message and push it through Stoat's
-                // existing websocket frame channel so ChannelScreenViewModel's
-                // listenToWsEvents renders it live, exactly like a Revolt message.
-                val adapted = DiscordToStoat.adaptMessage(message) ?: return@handleDispatch
+                // Adapt into the app's Message model and push it through the
+                // websocket frame channel so ChannelScreenViewModel's
+                // listenToWsEvents renders it live.
+                val adapted = DiscordMappings.adaptMessage(message) ?: return@handleDispatch
                 message.author?.id?.let { aid ->
-                    StoatAPI.userCache.putIfAbsent(aid, DiscordToStoat.adaptUser(message.author) ?: return@let)
+                    StoatAPI.userCache.putIfAbsent(
+                        aid,
+                        DiscordMappings.adaptUser(message.author) ?: return@let,
+                    )
                 }
-                message.member?.let { DiscordToStoat.cacheMemberUser(it) }
+                message.member?.let { DiscordMappings.cacheMemberUser(it) }
                 adapted.id?.let { StoatAPI.messageCache[it] = adapted }
                 StoatAPI.wsFrameChannel.tryEmit(adapted)
             }
@@ -219,6 +250,50 @@ object DiscordGateway {
                     payload.d!!,
                 )
                 message.id?.let { id -> DiscordAPI.messageCache[id] = message }
+                val adapted = DiscordMappings.cacheMessage(message) ?: return@handleDispatch
+                val messageUlid = adapted.id ?: return@handleDispatch
+                val channelUlid = message.channelId?.let { DiscordMappings.ulidForRequest(it) }
+                    ?: return@handleDispatch
+                val data = StoatJson.encodeToJsonElement(Message.serializer(), adapted)
+                    as? JsonObject ?: return@handleDispatch
+                StoatAPI.wsFrameChannel.tryEmit(
+                    MessageUpdateFrame(
+                        id = messageUlid,
+                        channel = channelUlid,
+                        data = data,
+                    )
+                )
+            }
+
+            "MESSAGE_DELETE" -> {
+                val deleted = DiscordJson.decodeFromJsonElement(
+                    MessageDeletePayload.serializer(),
+                    payload.d!!,
+                )
+                val snowflake = deleted.id ?: return@handleDispatch
+                val messageUlid = DiscordMappings.ulidForRequest(snowflake)
+                    ?: return@handleDispatch
+                val channelUlid = deleted.channelId?.let { DiscordMappings.ulidForRequest(it) }
+                    ?: return@handleDispatch
+                DiscordAPI.messageCache.remove(snowflake)
+                StoatAPI.messageCache.remove(messageUlid)
+                StoatAPI.wsFrameChannel.tryEmit(
+                    MessageDeleteFrame(id = messageUlid, channel = channelUlid)
+                )
+            }
+
+            "TYPING_START" -> {
+                val typing = DiscordJson.decodeFromJsonElement(
+                    TypingStartPayload.serializer(),
+                    payload.d!!,
+                )
+                val channelUlid = typing.channelId?.let { DiscordMappings.ulidForRequest(it) }
+                    ?: return@handleDispatch
+                val userUlid = typing.userId?.let { DiscordMappings.ulidForRequest(it) }
+                    ?: return@handleDispatch
+                StoatAPI.wsFrameChannel.tryEmit(
+                    ChannelStartTypingFrame(id = channelUlid, user = userUlid)
+                )
             }
 
             else -> {
@@ -251,7 +326,7 @@ object DiscordGateway {
             ),
         )
         val json = DiscordJson.encodeToString(GatewayIdentify.serializer(), identify)
-        Log.i("DiscordGateway", "Sent IDENTIFY: $json")
+        Log.i("DiscordGateway", "Sent IDENTIFY")
         send(json)
     }
 
@@ -307,3 +382,15 @@ object DiscordGateway {
         }
     }
 }
+
+@Serializable
+private data class MessageDeletePayload(
+    val id: String? = null,
+    @SerialName("channel_id") val channelId: String? = null,
+)
+
+@Serializable
+private data class TypingStartPayload(
+    @SerialName("channel_id") val channelId: String? = null,
+    @SerialName("user_id") val userId: String? = null,
+)

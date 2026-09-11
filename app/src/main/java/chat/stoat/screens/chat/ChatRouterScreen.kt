@@ -175,11 +175,8 @@ class ChatRouterViewModel(
                 kvStorage.set("selfName", User.resolveDefaultName(user))
                 // For Discord the avatar id is already a full cdn.discordapp.com URL,
                 // so don't wrap it in a Stoat files path (that would 404 / route to Stoat).
-                val selfAvatarUrl = if (DiscordAPI.isActive) {
-                    user.avatar?.id ?: ""
-                } else {
-                    user.avatar?.id?.let { "$STOAT_FILES/avatars/$it" } ?: ""
-                }
+                // Discord avatar ids are full cdn.discordapp.com URLs.
+                val selfAvatarUrl = user.avatar?.id ?: ""
                 kvStorage.set("selfAvatarUrl", selfAvatarUrl)
             }
 
@@ -430,7 +427,7 @@ fun ChatRouterScreen(
     }
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-        if (!DiscordAPI.isActive && RealtimeSocket.disconnectionState == DisconnectionState.Disconnected) {
+        if (RealtimeSocket.disconnectionState == DisconnectionState.Disconnected) {
             RealtimeSocket.updateDisconnectionState(DisconnectionState.Reconnecting)
             scope.launch { StoatAPI.connectWS() }
         }
@@ -905,7 +902,7 @@ fun ChatRouterScreen(
             )
     ) {
         AnimatedVisibility(
-            visible = RealtimeSocket.disconnectionState != DisconnectionState.Connected && !DiscordAPI.isActive
+            visible = RealtimeSocket.disconnectionState != DisconnectionState.Connected
         ) {
             DisconnectedNotice(
                 state = RealtimeSocket.disconnectionState,
@@ -917,7 +914,7 @@ fun ChatRouterScreen(
         }
 
         CompositionLocalProvider(
-            LocalIsConnected provides (RealtimeSocket.disconnectionState == DisconnectionState.Connected || DiscordAPI.isActive)
+            LocalIsConnected provides (RealtimeSocket.disconnectionState == DisconnectionState.Connected)
         ) {
             if (useTabletAwareUI) {
                 Row {

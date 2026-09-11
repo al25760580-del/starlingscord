@@ -79,7 +79,7 @@ fun Reaction(
                     description = null,
                     modifier = Modifier.size(16.dp)
                 )
-            } else if (DiscordAPI.isActive && DiscordAPI.emojiCache.containsKey(emoji)) {
+            } else if (DiscordAPI.emojiCache.containsKey(emoji)) {
                 val info = DiscordAPI.emojiCache[emoji]
                 RemoteImage(
                     url = "https://cdn.discordapp.com/emojis/${info?.id ?: emoji}.png",

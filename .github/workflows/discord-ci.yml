@@ -4,7 +4,7 @@ name: Discord CI (build, test & release)
 # plus the test report to a rolling GitHub Release on the fork.
 on:
   push:
-    branches: [ "feature/discord" ]
+    branches: [ "feature/discord", "feature/discord-only" ]
   workflow_dispatch:
 
 # GITHUB_TOKEN needs write access to create/updated the Release.

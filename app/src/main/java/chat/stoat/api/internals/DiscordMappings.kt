@@ -1,56 +1,54 @@
-package chat.stoat.discord
+package chat.stoat.api.internals
 
+import android.util.Log
 import chat.stoat.api.StoatAPI
 import chat.stoat.api.internals.ULID
 import chat.stoat.core.discord.models.DiscordChannel
 import chat.stoat.core.discord.models.DiscordChannelType
 import chat.stoat.core.discord.models.DiscordEmbed
 import chat.stoat.core.discord.models.DiscordGuild
+import chat.stoat.core.discord.models.DiscordGuildEmoji
+import chat.stoat.core.discord.models.DiscordMember
 import chat.stoat.core.discord.models.DiscordMessage
 import chat.stoat.core.discord.models.DiscordReaction
-import chat.stoat.discord.routes.fetchDMs
-import chat.stoat.discord.routes.fetchGuildChannels
-import chat.stoat.discord.routes.fetchGuildEmojis
-import chat.stoat.discord.routes.fetchGuilds
-import android.util.Log
 import chat.stoat.core.discord.models.DiscordUser
 import chat.stoat.core.discord.models.GatewayReady
 import chat.stoat.core.model.schemas.AutumnResource
 import chat.stoat.core.model.schemas.Category
 import chat.stoat.core.model.schemas.Channel
 import chat.stoat.core.model.schemas.ChannelType
+import chat.stoat.core.model.schemas.Emoji
+import chat.stoat.core.model.schemas.EmojiParent
 import chat.stoat.core.model.schemas.Embed
 import chat.stoat.core.model.schemas.Image
+import chat.stoat.core.model.schemas.Member
 import chat.stoat.core.model.schemas.Message
 import chat.stoat.core.model.schemas.Server
+import chat.stoat.core.model.schemas.ServerUserChoice
+import chat.stoat.core.model.schemas.ServerWithChannelObjects
 import chat.stoat.core.model.schemas.User
+import chat.stoat.discord.DiscordAPI
+import chat.stoat.discord.DiscordHttp
+import chat.stoat.discord.routes.fetchDMs
+import chat.stoat.discord.routes.fetchGuildChannels
+import chat.stoat.discord.routes.fetchGuildEmojis
+import chat.stoat.discord.routes.fetchGuilds
 
 /**
- * Builds a Discord CDN asset URL.
+ * Response mappers for the Discord backend.
  *
- * NOTE: Discord's CDN rejects `.gif` requests with HTTP 415 ("Invalid resource")
- * even for animated `a_` hashes. `.png` (and `.webp`/`.jpeg`) all return 200, so we
- * always request `.png`. This keeps avatars / server icons / banners rendering.
- * e.g. https://cdn.discordapp.com/avatars/{user_id}/{hash}.png
- */
-private fun discordCdnUrl(kind: String, id: String, hash: String): String {
-    return "https://cdn.discordapp.com/$kind/$id/$hash.png"
-}
-
-/**
- * Adapts Discord API/models into Revolt-shaped
- * [chat.stoat.core.model.schemas] objects so that Stoat's existing UI (servers,
- * channels, messages, profile, settings) can render Discord data directly from
- * [StoatAPI].
+ * This is the transport-layer mapping of the (single, exclusive) Discord
+ * backend into the app's UI models ([chat.stoat.core.model.schemas]) —
+ * the equivalent of what a REST client's DTO mappers do in any app.
  *
- * ID strategy: Discord uses decimal snowflakes. Revolt's [Message] composable
- * calls [ULID.asTimestamp] on [Message.id], so message ids are converted to
+ * ID strategy: Discord uses decimal snowflakes. The UI derives timestamps
+ * from message ids via [ULID.asTimestamp], so message ids are converted to
  * ULIDs derived from the snowflake's embedded timestamp. Every other id
  * (users, channels, servers, members) keeps its raw snowflake string and is
- * used consistently as a cache key across [StoatAPI]. [DiscordAPI.idMap] keeps
- * the ULID -> snowflake mapping for round-tripping actions.
+ * used consistently as a cache key across [StoatAPI]. [DiscordAPI.idMap]
+ * keeps the ULID -> snowflake mapping for round-tripping actions.
  */
-object DiscordToStoat {
+object DiscordMappings {
     private const val DISCORD_EPOCH = 1420070400000L
 
     /** Convert a Discord snowflake to a unix-ms timestamp. */
@@ -63,16 +61,16 @@ object DiscordToStoat {
         }
     }
 
-    /** Convert a Discord snowflake to a Revolt-shaped ULID. */
+    /** Convert a Discord snowflake to a ULID (used for message ids). */
     fun snowflakeToUlid(snowflake: String?): String? {
         val ts = snowflakeTimestamp(snowflake) ?: return null
         return ULID.makeSpecial(ts)
     }
 
     /**
-     * Resolve a creation timestamp from an id that may be a Revolt ULID or a
-     * Discord snowflake. Returns null if the id is neither (e.g. blank). Used by
-     * Stoat UI that derives "joined/created" dates from [User.id].
+     * Resolve a creation timestamp from an id that may be a ULID or a Discord
+     * snowflake. Returns null if the id is neither (e.g. blank). Used by UI
+     * that derives "joined/created" dates from ids.
      */
     fun idCreationTimestamp(id: String?): Long? {
         if (id == null) return null
@@ -81,6 +79,13 @@ object DiscordToStoat {
         }
         return snowflakeTimestamp(id)
     }
+
+    /** Map a (message) id as used by the UI back to a Discord snowflake. */
+    fun idForRequest(id: String): String = DiscordAPI.idMap[id] ?: id
+
+    /** Reverse of [idForRequest]: maps a Discord snowflake back to its ULID. */
+    fun ulidForRequest(snowflake: String): String? =
+        DiscordAPI.idMap.entries.firstOrNull { it.value == snowflake }?.key
 
     fun adaptUser(u: DiscordUser?): User? {
         // Bind the cross-module nullable id to a local so it can be safely
@@ -120,7 +125,7 @@ object DiscordToStoat {
 
     /**
      * Channel types that belong in the channel list. Categories, forums,
-     * directories and threads are excluded — categories are rendered as Revolt
+     * directories and threads are excluded — categories are rendered as
      * [Category] headers instead, and the others don't map to a normal text row.
      */
     fun isListableChannel(type: Int): Boolean = when (type) {
@@ -137,14 +142,13 @@ object DiscordToStoat {
      * Update the cached [Server] for [gid] from a Discord guild + its channels.
      *
      * - Adapts listable channels into [StoatAPI.channelCache].
-     * - Derives Revolt-style [Category] objects from Discord category channels,
-     *   each carrying the ids of the channels nested under it (in position order).
+     * - Derives [Category] objects from Discord category channels, each carrying
+     *   the ids of the channels nested under it (in position order).
      * - Records top-level channel ids on [Server.channels].
      *
      * Crucially, if this payload yields no channels/categories it PRESERVES the
      * already-cached ones, so a flaky REST/gateway fetch can never wipe out
-     * channels that were already being shown (the intermittent
-     * "channels appear then vanish" bug).
+     * channels that were already being shown.
      */
     fun upsertServer(gid: String, guild: DiscordGuild, rawChannels: List<DiscordChannel>) {
         val listable = rawChannels.filter { isListableChannel(it.type) }
@@ -153,7 +157,7 @@ object DiscordToStoat {
         val categories = rawChannels.filter { it.type == DiscordChannelType.GUILD_CATEGORY }
         val categoryIds = categories.mapNotNull { it.id }.toSet()
 
-        val revoltCategories = categories.sortedBy { it.position ?: 0 }.mapNotNull { cat ->
+        val uiCategories = categories.sortedBy { it.position ?: 0 }.mapNotNull { cat ->
             val cid = cat.id ?: return@mapNotNull null
             Category(
                 id = cid,
@@ -184,7 +188,7 @@ object DiscordToStoat {
             name = guild.name ?: base.name,
             description = guild.description ?: base.description,
             channels = if (topLevel.isNotEmpty()) topLevel else base.channels,
-            categories = if (revoltCategories.isNotEmpty()) revoltCategories else base.categories,
+            categories = if (uiCategories.isNotEmpty()) uiCategories else base.categories,
             icon = guild.icon?.let { h -> AutumnResource(id = discordCdnUrl("icons", gid, h)) }
                 ?: base.icon,
             banner = guild.banner?.let { h -> AutumnResource(id = discordCdnUrl("banners", gid, h)) }
@@ -197,6 +201,46 @@ object DiscordToStoat {
         val u = member?.user ?: return
         val uid = u.id ?: return
         StoatAPI.userCache[uid] = adaptUser(u) ?: return
+    }
+
+    /** Map a Discord guild member onto the app's [Member] model. */
+    fun adaptMember(serverId: String, m: DiscordMember): Member? {
+        val uid = m.user?.id ?: return null
+        return Member(
+            id = ServerUserChoice(server = serverId, user = uid),
+            joinedAt = m.joinedAt,
+            nickname = m.nick,
+            roles = m.roles,
+            avatar = m.user?.avatar?.let { h ->
+                AutumnResource(id = discordCdnUrl("avatars", uid, h))
+            },
+        )
+    }
+
+    /** Map a Discord guild emoji onto the app's [Emoji] model. */
+    fun adaptEmoji(e: DiscordGuildEmoji, guildId: String?): Emoji {
+        return Emoji(
+            id = e.id,
+            parent = EmojiParent(type = "Server", id = guildId ?: e.guildId),
+            name = e.name,
+            animated = e.animated,
+        )
+    }
+
+    /** Map a guild + its raw channels into a [ServerWithChannelObjects]. */
+    fun adaptServerWithChannels(guild: DiscordGuild, rawChannels: List<DiscordChannel>): ServerWithChannelObjects {
+        upsertServer(guild.id ?: "", guild, rawChannels)
+        val server = StoatAPI.serverCache[guild.id ?: ""]
+        return ServerWithChannelObjects(
+            id = guild.id,
+            owner = guild.ownerId,
+            name = guild.name,
+            description = guild.description,
+            channels = StoatAPI.channelCache.values.filter { it.server == guild.id },
+            categories = server?.categories,
+            icon = server?.icon,
+            banner = server?.banner,
+        )
     }
 
     fun adaptMessage(m: DiscordMessage): Message? {
@@ -243,10 +287,19 @@ object DiscordToStoat {
         return result
     }
 
-    /** Map Discord reactions onto Revolt's `reactions: Map<emojiKey, List<userId>>`
-     *  shape. The key is the emoji's snowflake id (custom) or its char (unicode);
-     *  the list contains the self user when [DiscordReaction.me] is true so the
-     *  existing Reaction UI can show the "own reaction" highlight + toggle. */
+    /** Cache a fully-adapted message and return it. */
+    fun cacheMessage(m: DiscordMessage): Message? {
+        val adapted = adaptMessage(m) ?: return null
+        adapted.id?.let { StoatAPI.messageCache[it] = adapted }
+        return adapted
+    }
+
+    /**
+     * Map Discord reactions onto the `reactions: Map<emojiKey, List<userId>>`
+     * shape. The key is the emoji's snowflake id (custom) or its char (unicode);
+     * the list contains the self user when [DiscordReaction.me] is true so the
+     * Reaction UI can show the "own reaction" highlight + toggle.
+     */
     private fun mapDiscordReactions(reactions: List<DiscordReaction>): Map<String, List<String>> {
         val map = mutableMapOf<String, List<String>>()
         reactions.forEach { r ->
@@ -267,8 +320,8 @@ object DiscordToStoat {
 
     /**
      * Populates [StoatAPI] caches from a Discord gateway READY event so that all
-     * of Stoat's existing screens render Discord data. Channels are fetched per
-     * guild via REST because the READY guild objects are reduced (no channels).
+     * existing screens render Discord data. Channels are fetched per guild via
+     * REST because the READY guild objects are reduced (no channels).
      */
     suspend fun populateFromReady(ready: GatewayReady) {
         val self = ready.user ?: return
@@ -291,11 +344,10 @@ object DiscordToStoat {
     }
 
     /**
-     * Seeds [StoatAPI] (and [DiscordAPI]) caches from REST endpoints so the UI has
-     * servers, DMs and channels immediately, independent of the gateway. The
-     * reduced guild objects from `/users/@me/guilds` lack [DiscordGuild.description]
-     * and [DiscordGuild.banner]; those arrive later via gateway `GUILD_CREATE`,
-     * which delivers the full guild object.
+     * Seeds the caches from REST endpoints so the UI has servers, DMs and
+     * channels immediately, independent of the gateway. The reduced guild
+     * objects from `/users/@me/guilds` lack description and banner; those
+     * arrive later via gateway `GUILD_CREATE`, which delivers the full object.
      */
     suspend fun populateFromRest() {
         runCatching {
@@ -316,7 +368,19 @@ object DiscordToStoat {
                 }
             }
         }.onFailure {
-            Log.e("DiscordToStoat", "populateFromRest failed", it)
+            Log.e("DiscordMappings", "populateFromRest failed", it)
         }
     }
+}
+
+/**
+ * Builds a Discord CDN asset URL.
+ *
+ * NOTE: Discord's CDN rejects `.gif` requests with HTTP 415 ("Invalid resource")
+ * even for animated `a_` hashes. `.png` (and `.webp`/`.jpeg`) all return 200, so
+ * we always request `.png`. This keeps avatars / server icons / banners
+ * rendering. e.g. https://cdn.discordapp.com/avatars/{user_id}/{hash}.png
+ */
+internal fun discordCdnUrl(kind: String, id: String, hash: String): String {
+    return "https://cdn.discordapp.com/$kind/$id/$hash.png"
 }

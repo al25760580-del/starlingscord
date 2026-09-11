@@ -41,7 +41,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import chat.stoat.R
-import chat.stoat.api.StoatHttp
+import chat.stoat.discord.DiscordHttp
 import io.ktor.client.request.get
 import io.ktor.client.statement.readBytes
 import kotlinx.coroutines.delay
@@ -124,7 +124,7 @@ fun AudioPlayer(url: String, filename: String, contentType: String) {
                 )
             }?.let { uri ->
                 context.contentResolver.openOutputStream(uri).use { stream ->
-                    val audio = StoatHttp.get(url).readBytes()
+                    val audio = DiscordHttp.get(url).readBytes()
                     stream?.write(audio)
 
                     context.applicationContext.let {

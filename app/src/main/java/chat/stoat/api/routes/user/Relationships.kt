@@ -1,9 +1,8 @@
 package chat.stoat.api.routes.user
 
-import chat.stoat.api.StoatAPIError
-import chat.stoat.api.StoatHttp
-import chat.stoat.api.StoatJson
-import chat.stoat.api.api
+import chat.stoat.discord.DISCORD_API
+import chat.stoat.discord.DiscordHttp
+import chat.stoat.discord.DiscordJson
 import io.ktor.client.request.delete
 import io.ktor.client.request.post
 import io.ktor.client.request.put
@@ -11,67 +10,73 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
-import kotlinx.serialization.SerializationException
+import kotlinx.serialization.Serializable
 
+@Serializable
+private data class RelationshipTypeBody(val type: Int)
+
+@Serializable
+private data class FriendByUsernameBody(val username: String, val discriminator: String = "0")
+
+/** Blocks a user: `PUT /users/@me/relationships/{uid}` with type 2. */
 suspend fun blockUser(userId: String) {
-    val response = StoatHttp.put("/users/$userId/block".api())
-        .bodyAsText()
-
-    try {
-        val error = StoatJson.decodeFromString(StoatAPIError.serializer(), response)
-        throw Exception(error.type)
-    } catch (e: SerializationException) {
-        // Not an error
-    }
-}
-
-suspend fun unblockUser(userId: String) {
-    val response = StoatHttp.delete("/users/$userId/block".api())
-        .bodyAsText()
-
-    try {
-        val error = StoatJson.decodeFromString(StoatAPIError.serializer(), response)
-        throw Exception(error.type)
-    } catch (e: SerializationException) {
-        // Not an error
-    }
-}
-
-suspend fun friendUser(username: String) {
-    val response = StoatHttp.post("/users/friend".api()) {
+    val response = DiscordHttp.put("$DISCORD_API/users/@me/relationships/$userId") {
         contentType(ContentType.Application.Json)
-        setBody(mapOf("username" to username))
+        setBody(
+            DiscordJson.encodeToString(
+                RelationshipTypeBody.serializer(),
+                RelationshipTypeBody(type = 2),
+            )
+        )
     }
-    val body = response.bodyAsText()
-
-    try {
-        val error = StoatJson.decodeFromString(StoatAPIError.serializer(), body)
-        throw Exception(error.type)
-    } catch (e: SerializationException) {
-        // Not an error
-    }
+    ensureOk(response.bodyAsText(), response.status.value)
 }
 
+/** Unblocks (or unfriends / cancels a request from) a user. */
+suspend fun unblockUser(userId: String) {
+    val response = DiscordHttp.delete("$DISCORD_API/users/@me/relationships/$userId")
+    ensureOk(response.bodyAsText(), response.status.value)
+}
+
+/** Sends a friend request by username: `POST /users/@me/relationship`. */
+suspend fun friendUser(username: String) {
+    val response = DiscordHttp.post("$DISCORD_API/users/@me/relationship") {
+        contentType(ContentType.Application.Json)
+        setBody(
+            DiscordJson.encodeToString(
+                FriendByUsernameBody.serializer(),
+                FriendByUsernameBody(username = username),
+            )
+        )
+    }
+    ensureOk(response.bodyAsText(), response.status.value)
+}
+
+/** Accepts an incoming friend request (or re-sends one): `PUT /users/@me/relationships/@me`. */
 suspend fun acceptFriendRequest(userId: String) {
-    val response = StoatHttp.put("/users/$userId/friend".api())
-        .bodyAsText()
-
-    try {
-        val error = StoatJson.decodeFromString(StoatAPIError.serializer(), response)
-        throw Exception(error.type)
-    } catch (e: SerializationException) {
-        // Not an error
+    val response = DiscordHttp.put("$DISCORD_API/users/@me/relationships/@me") {
+        contentType(ContentType.Application.Json)
+        setBody(
+            DiscordJson.encodeToString(
+                FriendByIdBody.serializer(),
+                FriendByIdBody(id = userId),
+            )
+        )
     }
+    ensureOk(response.bodyAsText(), response.status.value)
 }
 
-suspend fun unfriendUser(userId: String) {
-    val response = StoatHttp.delete("/users/$userId/friend".api())
-        .bodyAsText()
+@Serializable
+private data class FriendByIdBody(val type: Int = 1, val id: String)
 
-    try {
-        val error = StoatJson.decodeFromString(StoatAPIError.serializer(), response)
-        throw Exception(error.type)
-    } catch (e: SerializationException) {
-        // Not an error
+/** Removes a friend / declines a request. */
+suspend fun unfriendUser(userId: String) {
+    val response = DiscordHttp.delete("$DISCORD_API/users/@me/relationships/$userId")
+    ensureOk(response.bodyAsText(), response.status.value)
+}
+
+private fun ensureOk(body: String, status: Int) {
+    if (status !in 200..299) {
+        throw Exception("Discord relationship action failed: HTTP $status: ${body.take(200)}")
     }
 }

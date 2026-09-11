@@ -3,8 +3,9 @@ package chat.stoat.composables.chat
 import android.util.Log
 import chat.stoat.composables.markdown.prose.ChatMarkdown
 import chat.stoat.discord.DiscordAPI
-import chat.stoat.discord.DiscordToStoat
-import chat.stoat.discord.routes.DiscordHttp
+import chat.stoat.api.internals.DiscordMappings
+import chat.stoat.discord.DiscordHttp
+import chat.stoat.discord.routes.fetchDiscordMessage
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -66,12 +67,10 @@ fun InReplyTo(
     LaunchedEffect(messageId) {
         if (messageId !in StoatAPI.messageCache) {
             try {
-                val fetched = if (DiscordAPI.isActive) {
-                    DiscordHttp.fetchDiscordMessage(channelId, messageId)
-                        ?.let { DiscordToStoat.adaptMessage(it) }
-                } else {
-                    fetchSingleMessage(channelId, messageId)
-                }
+                val fetched = DiscordHttp.fetchDiscordMessage(
+                    channelId,
+                    DiscordMappings.idForRequest(messageId),
+                )?.let { DiscordMappings.adaptMessage(it) }
                 if (fetched != null) StoatAPI.messageCache[messageId] = fetched
             } catch (e: CancellationException) {
                 // It's fine
@@ -154,20 +153,12 @@ fun InReplyTo(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                } else if (DiscordAPI.isActive) {
+                } else {
                     ChatMarkdown(
                         content = message.content!!,
                         serverId = serverId,
                         fontSizeMultiplier = 1f,
                         modifier = Modifier.fillMaxWidth(),
-                    )
-                } else {
-                    Text(
-                        text = message.content!!,
-                        fontSize = 12.sp,
-                        color = contentColor.copy(alpha = 0.7f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
                     )
                 }
             } else {

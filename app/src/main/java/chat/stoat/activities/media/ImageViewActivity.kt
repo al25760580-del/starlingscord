@@ -41,7 +41,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.core.view.WindowCompat
 import chat.stoat.R
-import chat.stoat.api.StoatHttp
+import chat.stoat.discord.DiscordHttp
 import chat.stoat.core.model.schemas.AutumnResource
 import chat.stoat.api.settings.LoadedSettings
 import chat.stoat.api.settings.SyncedSettings
@@ -151,7 +151,7 @@ fun ImageViewScreen(resource: AutumnResource, onClose: () -> Unit = {}) {
                 )
             }?.let { uri ->
                 context.contentResolver.openOutputStream(uri).use { stream ->
-                    val image = StoatHttp.get(resourceUrl).readBytes()
+                    val image = DiscordHttp.get(resourceUrl).readBytes()
                     stream?.write(image)
 
                     context.applicationContext.let {

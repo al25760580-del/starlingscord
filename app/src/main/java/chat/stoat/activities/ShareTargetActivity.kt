@@ -202,14 +202,6 @@ class ShareTargetScreenViewModel(
     }
 
     suspend fun initialiseAPI() {
-        if (DiscordAPI.isActive || kvStorage.get("auth_backend") == "discord") {
-            val discordToken = kvStorage.get("discord_session_token")
-            if (!discordToken.isNullOrBlank()) {
-                DiscordAPI.loginAs(discordToken)
-                apiIsReady = true
-                return
-            }
-        }
         if (!StoatAPI.isLoggedIn()) {
             val token = kvStorage.get("sessionToken") ?: return
             StoatAPI.loginAs(token)

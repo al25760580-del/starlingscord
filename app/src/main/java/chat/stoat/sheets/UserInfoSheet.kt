@@ -43,7 +43,7 @@ import chat.stoat.api.StoatAPI
 import chat.stoat.api.internals.BrushCompat
 import chat.stoat.api.internals.ULID
 import chat.stoat.api.internals.solidColor
-import chat.stoat.discord.DiscordToStoat
+import chat.stoat.api.internals.DiscordMappings
 import chat.stoat.api.routes.user.fetchUserProfile
 import chat.stoat.api.settings.Experiments
 import chat.stoat.api.settings.FeatureFlags
@@ -218,7 +218,7 @@ fun UserInfoSheet(
             }
         }
         val accountAt = user.id?.let { id ->
-            DiscordToStoat.idCreationTimestamp(id)?.let { ts ->
+            DiscordMappings.idCreationTimestamp(id)?.let { ts ->
                 DateUtils.getRelativeTimeSpanString(
                     ts,
                     System.currentTimeMillis(),

@@ -1,9 +1,7 @@
 package chat.stoat.api.routes.account
 
-import chat.stoat.api.StoatAPIError
-import chat.stoat.api.StoatHttp
-import chat.stoat.api.StoatJson
-import chat.stoat.api.api
+import chat.stoat.discord.DISCORD_API
+import chat.stoat.discord.DiscordHttp
 import io.ktor.client.request.patch
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
@@ -16,39 +14,34 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class ChangeEmailBody(
     val email: String,
-    @SerialName("current_password") val currentPassword: String
+    val password: String
 )
 
+/** Changes the account email: `PATCH /users/@me`. */
 suspend fun changeEmail(newEmail: String, currentPassword: String) {
-    val res = StoatHttp.patch("/auth/account/change/email".api()) {
-        setBody(ChangeEmailBody(newEmail, currentPassword))
+    val res = DiscordHttp.patch("$DISCORD_API/users/@me") {
         contentType(ContentType.Application.Json)
+        setBody(ChangeEmailBody(email = newEmail, password = currentPassword))
     }
     if (!res.status.isSuccess()) {
-        runCatching { StoatJson.decodeFromString(StoatAPIError.serializer(), res.bodyAsText()) }
-            .onSuccess { throw Exception(it.type) }
-
-        val errorResponse = res.bodyAsText()
-        throw Exception("Failed to change email: $errorResponse")
+        throw Exception("Failed to change email: HTTP ${res.status.value}: ${res.bodyAsText().take(200)}")
     }
 }
 
 @Serializable
 data class ChangePasswordBody(
-    val password: String,
-    @SerialName("current_password") val currentPassword: String
+    @SerialName("new_password")
+    val newPassword: String,
+    val password: String
 )
 
+/** Changes the account password: `PATCH /users/@me`. */
 suspend fun changePassword(newPassword: String, currentPassword: String) {
-    val res = StoatHttp.patch("/auth/account/change/password".api()) {
-        setBody(ChangePasswordBody(newPassword, currentPassword))
+    val res = DiscordHttp.patch("$DISCORD_API/users/@me") {
         contentType(ContentType.Application.Json)
+        setBody(ChangePasswordBody(newPassword = newPassword, password = currentPassword))
     }
     if (!res.status.isSuccess()) {
-        runCatching { StoatJson.decodeFromString(StoatAPIError.serializer(), res.bodyAsText()) }
-            .onSuccess { throw Exception(it.type) }
-
-        val errorResponse = res.bodyAsText()
-        throw Exception("Failed to change password: $errorResponse")
+        throw Exception("Failed to change password: HTTP ${res.status.value}: ${res.bodyAsText().take(200)}")
     }
 }

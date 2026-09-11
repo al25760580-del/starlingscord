@@ -155,14 +155,6 @@ fun LoginGreetingScreen(navController: NavController) {
                 Text(text = stringResource(R.string.signup))
             }
 
-            Button(
-                onClick = { navController.navigate("discord/login") },
-                modifier = Modifier
-                    .fillMaxWidth()
-            ) {
-                Text(text = "Continue with Discord")
-            }
-
             Spacer(modifier = Modifier.height(5.dp))
 
             AnimatedVisibility(showBoringButton) {
