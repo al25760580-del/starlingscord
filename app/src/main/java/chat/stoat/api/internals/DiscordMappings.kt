@@ -459,6 +459,23 @@ object DiscordMappings {
         return map
     }
 
+    /**
+     * GIF providers whose mp4 "gifv" media the official clients play inline
+     * like an autoplaying, looping GIF. Hardcoded, like Discord does; any
+     * other video (including every attachment) gets the full player.
+     */
+    private val GIF_PROVIDER_HOSTS = listOf(
+        "tenor.com", // Google Tenor (the classic GIF picker source)
+        "giphy.com", // Giphy (Discord's other GIF provider)
+        "klipy.com", // Klipy (founded by the Tenor team; Discord's new default)
+    )
+
+    private fun isGifProviderUrl(url: String?): Boolean {
+        val host = runCatching { java.net.URI(url ?: return false).host }.getOrNull()
+            ?: return false
+        return GIF_PROVIDER_HOSTS.any { host == it || host.endsWith(".$it") }
+    }
+
     private fun adaptEmbed(e: DiscordEmbed): Embed {
         val colour = e.color?.let { String.format("#%06X", it and 0xFFFFFF) }
 
@@ -466,8 +483,11 @@ object DiscordMappings {
         // like an autoplaying, looping GIF.
         val video = e.video
         if (video?.url != null) {
+            // Only GIF-provider domains (Tenor, Giphy, Klipy) autoplay
+            // inline; any other gifv video goes to the full player.
+            val type = if (isGifProviderUrl(video.url)) "Gif" else "Video"
             return Embed(
-                type = "Gif",
+                type = type,
                 url = e.url ?: video.url,
                 originalURL = e.url,
                 video = Image(

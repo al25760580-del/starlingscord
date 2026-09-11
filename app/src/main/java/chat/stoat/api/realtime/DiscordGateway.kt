@@ -115,6 +115,11 @@ object DiscordGateway {
                                 payload.d!!,
                             )
                             heartbeatIntervalMs = hello.heartbeatInterval
+                            // Fresh connection: reset the ACK state so a
+                            // stale "missed ACK" from a previous connection
+                            // can't instantly close this one (that was the
+                            // infinite reconnect loop).
+                            lastHeartbeatAcked = true
                             if (heartbeatJob == null) {
                                 heartbeatJob = launch { heartbeatLoop() }
                             }
@@ -162,9 +167,15 @@ object DiscordGateway {
                             } else {
                                 canResume = false
                                 lastSeq = null
-                                // Docs: wait 1-5s before re-identifying.
-                                delay((1000L..5000L).random())
-                                sendIdentify(token)
+                                // Docs: the session is dead - disconnect,
+                                // wait 1-5s, reconnect with a fresh IDENTIFY.
+                                // The wait runs in a child coroutine so frame
+                                // processing (incl. heartbeat ACKs) isn't
+                                // blocked; the outer loop does the reconnect.
+                                launch {
+                                    delay((1000L..5000L).random())
+                                    close(CloseReason(4000.toShort(), "Invalid session"))
+                                }
                             }
                         }
                     }
@@ -368,6 +379,8 @@ object DiscordGateway {
                 DiscordAPI.connected = true
                 DiscordAPI.connectionError = null
                 RealtimeSocket.updateDisconnectionState(DisconnectionState.Connected)
+                // Same treatment as READY: let the open channel resync.
+                onReadyCallback?.invoke()
                 Log.i("DiscordGateway", "Session resumed; missed events replayed")
             }
 

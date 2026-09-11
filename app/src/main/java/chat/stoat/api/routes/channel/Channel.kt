@@ -10,6 +10,7 @@ import chat.stoat.discord.DISCORD_API
 import chat.stoat.discord.DiscordHttp
 import chat.stoat.discord.DiscordJson
 import chat.stoat.core.discord.models.DiscordMessageReference
+import chat.stoat.discord.routes.DiscordAttachmentRef
 import chat.stoat.discord.routes.DiscordMessageSend
 import chat.stoat.discord.routes.ackChannel
 import chat.stoat.discord.routes.fetchChannelMessages
@@ -100,7 +101,7 @@ suspend fun sendMessage(
     content: String,
     nonce: String = "",
     replies: List<SendMessageReply>? = null,
-    attachments: List<String>? = null,
+    attachments: List<DiscordAttachmentRef>? = null,
     idempotencyKey: String = ""
 ): String {
     val messageReference = replies?.firstOrNull()?.let {
@@ -109,8 +110,12 @@ suspend fun sendMessage(
             channelId = channelId,
         )
     }
-    val sent = DiscordHttp.sendMessage(channelId, content, messageReference)
-        ?: throw Exception("Failed to send message")
+    val sent = DiscordHttp.sendMessage(
+        channelId,
+        content,
+        messageReference,
+        attachments ?: emptyList(),
+    ) ?: throw Exception("Failed to send message")
     val adapted = DiscordMappings.cacheMessage(sent)
     return adapted?.id ?: sent.id ?: ""
 }

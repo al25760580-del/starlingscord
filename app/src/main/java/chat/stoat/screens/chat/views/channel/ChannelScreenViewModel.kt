@@ -45,7 +45,9 @@ import chat.stoat.discord.DiscordAPI
 import chat.stoat.discord.DiscordHttp
 import chat.stoat.api.internals.DiscordMappings
 import chat.stoat.discord.routes.fetchChannelMessages
+import chat.stoat.discord.routes.DiscordAttachmentRef
 import chat.stoat.discord.routes.sendDiscordMessage
+import chat.stoat.discord.routes.uploadChannelAttachment
 import chat.stoat.core.discord.models.DiscordMessageReference
 import chat.stoat.api.settings.GeoStateProvider
 import chat.stoat.callbacks.Action
@@ -522,19 +524,43 @@ class ChannelScreenViewModel(
                 }
             }
 
-            val attachmentIds = arrayListOf<String>()
             val takenAttachments =
                 this@ChannelScreenViewModel.draftAttachments.take(MAX_ATTACHMENTS_PER_MESSAGE)
             val totalTaken = takenAttachments.size
 
+            // Upload the attachments through Discord's cloud upload flow
+            // (POST /channels/{id}/attachments -> PUT to the signed GCS
+            // URL), then reference the uploaded files in the message.
+            val uploadRefs = arrayListOf<DiscordAttachmentRef>()
             if (takenAttachments.isNotEmpty()) {
-                Log.w(
-                    "ChannelScreenViewModel",
-                    "Attachments are not supported on the Discord backend yet",
-                )
-                attachmentUploadProgress = 0f
-                isSending = false
-                return@launch
+                val channelId = channel?.id
+                if (channelId != null) {
+                    try {
+                        takenAttachments.forEachIndexed { index, attachment ->
+                            uploadRefs.add(
+                                uploadChannelAttachment(
+                                    channelId = channelId,
+                                    file = attachment.file,
+                                    filename = if (attachment.spoiler) {
+                                        "SPOILER_${attachment.filename}"
+                                    } else {
+                                        attachment.filename
+                                    },
+                                ) { written, total ->
+                                    attachmentUploadProgress =
+                                        ((written.toFloat() / total) + index.toFloat()) / totalTaken
+                                }
+                            )
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.e("ChannelScreenViewModel", "Failed to upload attachment", e)
+                        attachmentUploadProgress = 0f
+                        isSending = false
+                        return@launch
+                    }
+                }
             }
 
             val nonce = ULID.makeNext()
@@ -586,6 +612,7 @@ class ChannelScreenViewModel(
                         channelId = channel?.id ?: return@launch,
                         content = content,
                         messageReference = replyReference,
+                        attachments = uploadRefs,
                     )
                     val adapted =
                         sent?.let { DiscordMappings.adaptMessage(it) }?.copy(nonce = nonce)
