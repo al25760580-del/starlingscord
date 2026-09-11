@@ -357,14 +357,46 @@ object DiscordMappings {
         val embeds = buildList {
             m.embeds?.forEach { e -> add(adaptEmbed(e)) }
             m.attachments?.forEach { a ->
-                if (a.url != null) {
-                    add(
+                val url = a.url ?: return@forEach
+                val ct = a.contentType?.lowercase().orEmpty()
+                val name = a.filename?.lowercase().orEmpty()
+                val isImage = ct.startsWith("image/") ||
+                        listOf(".png", ".jpg", ".jpeg", ".gif", ".webp").any { name.endsWith(it) }
+                val isVideo = ct.startsWith("video/") ||
+                        listOf(".mp4", ".webm", ".mov").any { name.endsWith(it) }
+                when {
+                    // Videos (incl. GIFs uploaded as mp4) play inline like a GIF.
+                    isVideo -> add(
                         Embed(
-                            image = Image(
-                                url = a.url,
+                            type = "Gif",
+                            url = url,
+                            video = Image(
+                                url = url,
                                 width = a.width?.toLong(),
                                 height = a.height?.toLong(),
-                            )
+                            ),
+                            width = a.width?.toLong(),
+                            height = a.height?.toLong(),
+                        )
+                    )
+
+                    isImage -> add(
+                        Embed(
+                            type = "Image",
+                            url = url,
+                            width = a.width?.toLong() ?: 480L,
+                            height = a.height?.toLong() ?: 360L,
+                        )
+                    )
+
+                    // Generic files render as a small card linking to the file.
+                    else -> add(
+                        Embed(
+                            type = "Website",
+                            url = url,
+                            originalURL = url,
+                            title = a.filename ?: "File",
+                            siteName = a.contentType ?: "File",
                         )
                     )
                 }
@@ -427,10 +459,50 @@ object DiscordMappings {
     }
 
     private fun adaptEmbed(e: DiscordEmbed): Embed {
+        val colour = e.color?.let { String.format("#%06X", it and 0xFFFFFF) }
+
+        // GIFV (Tenor & friends): an mp4 that the official clients play inline
+        // like an autoplaying, looping GIF.
+        val video = e.video
+        if (video?.url != null) {
+            return Embed(
+                type = "Gif",
+                url = e.url ?: video.url,
+                originalURL = e.url,
+                video = Image(
+                    url = video.url,
+                    width = video.width?.toLong(),
+                    height = video.height?.toLong(),
+                ),
+                width = video.width?.toLong(),
+                height = video.height?.toLong(),
+            )
+        }
+
+        // Bare image links arrive as type "image" with just an image field:
+        // render them as full-width images, not as website cards.
+        val image = e.image
+        if (e.type == "image" && image?.url != null) {
+            return Embed(
+                type = "Image",
+                url = image.url,
+                width = image.width?.toLong() ?: 480L,
+                height = image.height?.toLong() ?: 360L,
+            )
+        }
+
         return Embed(
-            title = e.title,
-            description = e.description,
+            type = "Website",
             url = e.url,
+            originalURL = e.url,
+            title = e.title ?: e.author?.name,
+            description = e.description,
+            image = (e.image ?: e.thumbnail)?.let { m ->
+                Image(url = m.url, width = m.width?.toLong(), height = m.height?.toLong())
+            },
+            iconURL = e.author?.iconUrl ?: e.footer?.iconUrl,
+            siteName = e.provider?.name,
+            colour = colour,
         )
     }
 

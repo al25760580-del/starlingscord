@@ -555,7 +555,10 @@ fun ChatMarkdown(
                                 } else {
                                     with(LocalDensity.current) {
                                         RemoteImage(
-                                            url = if (discordEmote != null) "https://cdn.discordapp.com/emojis/${discordEmote.id}.png" else "$STOAT_FILES/emojis/$emoteKey",
+                                            url = if (discordEmote != null) {
+                                                "https://cdn.discordapp.com/emojis/${discordEmote.id}" +
+                                                        if (discordEmote.animated == true) ".gif" else ".png"
+                                            } else "$STOAT_FILES/emojis/$emoteKey",
                                             description = discordEmote?.name ?: emote?.name,
                                             contentScale = ContentScale.Fit,
                                             modifier = Modifier

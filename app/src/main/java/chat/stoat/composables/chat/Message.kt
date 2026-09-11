@@ -618,6 +618,12 @@ fun Message(
                                         Spacer(modifier = Modifier.height(2.dp))
                                     }
 
+                                    "Gif" -> {
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        GifLikeVideo(embed = embed)
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                    }
+
                                     else -> {
                                         // no-op
                                     }

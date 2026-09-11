@@ -146,6 +146,9 @@ object DiscordAPI {
     /** The logged-in user's own guild member object (carrying role IDs) per guild. */
     val selfMembers = mutableStateMapOf<String, DiscordMember>()
 
+    /** The logged-in user's premium type (0 none, 1 Classic, 2 Nitro, 3 Basic). */
+    var selfPremiumType: Int? = null
+
     fun setSessionToken(token: String) {
         sessionToken = token
     }
@@ -172,5 +175,6 @@ object DiscordAPI {
         roleCache.clear()
         guildPermissions.clear()
         selfMembers.clear()
+        selfPremiumType = null
     }
 }

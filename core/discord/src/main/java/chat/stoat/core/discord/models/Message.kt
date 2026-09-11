@@ -79,6 +79,39 @@ data class DiscordEmbed(
     val description: String? = null,
     val url: String? = null,
     val color: Int? = null,
+    val image: DiscordEmbedMedia? = null,
+    val thumbnail: DiscordEmbedMedia? = null,
+    val video: DiscordEmbedMedia? = null,
+    val provider: DiscordEmbedProvider? = null,
+    val author: DiscordEmbedAuthor? = null,
+    val footer: DiscordEmbedFooter? = null,
+)
+
+@Serializable
+data class DiscordEmbedMedia(
+    val url: String? = null,
+    @SerialName("proxy_url") val proxyUrl: String? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+)
+
+@Serializable
+data class DiscordEmbedProvider(
+    val name: String? = null,
+    val url: String? = null,
+)
+
+@Serializable
+data class DiscordEmbedAuthor(
+    val name: String? = null,
+    val url: String? = null,
+    @SerialName("icon_url") val iconUrl: String? = null,
+)
+
+@Serializable
+data class DiscordEmbedFooter(
+    val text: String? = null,
+    @SerialName("icon_url") val iconUrl: String? = null,
 )
 
 @Serializable

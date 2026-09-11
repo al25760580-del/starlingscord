@@ -42,6 +42,8 @@ suspend fun fetchSelf(): User {
     StoatAPI.userCache[user.id!!] = user
     StoatAPI.selfId = user.id
     self.id?.let { chat.stoat.discord.DiscordAPI.userCache[it] = self }
+    // Premium type gates emoji usage (external/animated custom emoji).
+    chat.stoat.discord.DiscordAPI.selfPremiumType = self.premiumType ?: 0
 
     return user
 }

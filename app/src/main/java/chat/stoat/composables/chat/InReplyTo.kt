@@ -10,6 +10,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -158,7 +160,11 @@ fun InReplyTo(
                         content = message.content!!,
                         serverId = serverId,
                         fontSizeMultiplier = 1f,
-                        modifier = Modifier.fillMaxWidth(),
+                        // Long replies are clipped to ~2 lines, like Discord.
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .clipToBounds(),
                     )
                 }
             } else {

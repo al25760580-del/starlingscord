@@ -79,6 +79,7 @@ import kotlinx.coroutines.launch
 fun EmojiPicker(
     onSearchFocus: (Boolean) -> Unit = {},
     bottomInset: Dp = 0.dp,
+    serverId: String? = null,
     onEmojiSelected: (String) -> Unit,
 ) {
     val view = LocalView.current
@@ -186,7 +187,10 @@ fun EmojiPicker(
                 )
             )
 
-            is EmojiPickerItem.ServerEmote -> onEmojiSelected("<:${it.emote.name}:${it.emote.id}>")
+            is EmojiPickerItem.ServerEmote -> onEmojiSelected(
+                // Animated emojis need the <a:name:id> form.
+                "<${if (it.emote.animated == true) "a" else ""}:${it.emote.name}:${it.emote.id}>"
+            )
             else -> {}
         }
     }
@@ -534,6 +538,7 @@ fun EmojiPicker(
                     skinToneFactory = { emojiImpl.applyFitzpatrickSkinTone(it, currentSkinTone) },
                     onClick = onEmojiClick,
                     onServerEmoteInfo = onServerEmoteInfo,
+                    currentServerId = serverId,
                     lesserHeaders = true
                 )
             }
@@ -564,7 +569,8 @@ fun EmojiPicker(
                     item = pickerList[index],
                     skinToneFactory = { emojiImpl.applyFitzpatrickSkinTone(it, currentSkinTone) },
                     onClick = onEmojiClick,
-                    onServerEmoteInfo = onServerEmoteInfo
+                    onServerEmoteInfo = onServerEmoteInfo,
+                    currentServerId = serverId
                 )
             }
 
@@ -587,6 +593,7 @@ fun ColumnScope.PickerItem(
     skinToneFactory: (EmojiPickerItem.UnicodeEmoji) -> String,
     onClick: (EmojiPickerItem) -> Unit,
     onServerEmoteInfo: (String) -> Unit,
+    currentServerId: String? = null,
     lesserHeaders: Boolean = false
 ) {
     when (item) {
@@ -610,20 +617,31 @@ fun ColumnScope.PickerItem(
         }
 
         is EmojiPickerItem.ServerEmote -> {
+            // Nitro gating: without a subscription, custom emoji can only be
+            // used inside the server it belongs to; animated emoji need full
+            // Nitro. Locked emojis render dimmed and can't be inserted.
+            val premiumType = DiscordAPI.selfPremiumType
+            val nitroFull = premiumType == 1 || premiumType == 2 // Classic / Nitro
+            val nitroAny = nitroFull || premiumType == 3 // + Basic (emoji anywhere)
+            val usable = (item.emote.parent?.id == currentServerId || nitroAny) &&
+                    (item.emote.animated != true || nitroFull)
+
             Column(
                 modifier = Modifier
                     .clip(CircleShape)
                     .combinedClickable(
-                        onClick = { onClick(item) },
+                        onClick = { if (usable) onClick(item) },
                         onLongClick = {}
                     )
+                    .alpha(if (usable) 1f else 0.35f)
                     .aspectRatio(1f)
                     .weight(1f),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
                 RemoteImage(
-                    url = "$STOAT_FILES/emojis/${item.emote.id}",
+                    url = "https://cdn.discordapp.com/emojis/${item.emote.id}" +
+                            if (item.emote.animated == true) ".gif" else ".png",
                     description = item.emote.name,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
