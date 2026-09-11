@@ -365,10 +365,11 @@ object DiscordMappings {
                 val isVideo = ct.startsWith("video/") ||
                         listOf(".mp4", ".webm", ".mov").any { name.endsWith(it) }
                 when {
-                    // Videos (incl. GIFs uploaded as mp4) play inline like a GIF.
+                    // Regular video attachments get a full player with
+                    // controls; only gifv embeds (Tenor) render GIF-like.
                     isVideo -> add(
                         Embed(
-                            type = "Gif",
+                            type = "Video",
                             url = url,
                             video = Image(
                                 url = url,

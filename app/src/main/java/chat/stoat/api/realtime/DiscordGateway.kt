@@ -31,6 +31,7 @@ import io.ktor.websocket.close
 import io.ktor.websocket.readText
 import io.ktor.websocket.send
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -68,10 +69,29 @@ object DiscordGateway {
     @Volatile
     private var onReadyCallback: (() -> Unit)? = null
 
+    /** resume_gateway_url from READY; reconnects after a drop go here. */
+    @Volatile
+    private var resumeGatewayUrl: String? = null
+
+    /** Whether the current session can be resumed (set on READY, cleared on invalid session). */
+    @Volatile
+    private var canResume = false
+
+    /** Whether the last heartbeat was ACKed by the server. */
+    @Volatile
+    private var lastHeartbeatAcked = true
+
     suspend fun connect(token: String, onReady: (() -> Unit)? = null) {
         onReadyCallback = onReady
         RealtimeSocket.updateDisconnectionState(DisconnectionState.Reconnecting)
-        DiscordHttp.ws(DISCORD_GATEWAY) {
+        // After a drop, resume via resume_gateway_url instead of the default
+        // gateway (docs: not doing so causes disconnects at a higher rate).
+        val gatewayUrl = if (canResume && resumeGatewayUrl != null) {
+            resumeGatewayUrl!!
+        } else {
+            DISCORD_GATEWAY
+        }
+        DiscordHttp.ws(gatewayUrl) {
             socket = this
             var heartbeatJob: Job? = null
             try {
@@ -98,25 +118,54 @@ object DiscordGateway {
                             if (heartbeatJob == null) {
                                 heartbeatJob = launch { heartbeatLoop() }
                             }
-                            sendIdentify(token)
+                            if (canResume && !DiscordAPI.sessionId.isNullOrBlank()) {
+                                sendResume(token)
+                            } else {
+                                sendIdentify(token)
+                            }
                         }
 
-                        11 -> {
-                            // Heartbeat ACK - nothing to do.
+                        1 -> { // Heartbeat request from the server: answer now.
+                            sendHeartbeat()
+                        }
+
+                        11 -> { // Heartbeat ACK
+                            lastHeartbeatAcked = true
                         }
 
                         0 -> { // DISPATCH
                             lastSeq = payload.s
-                            handleDispatch(payload)
+                            // One bad event must never kill the connection.
+                            try {
+                                handleDispatch(payload)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                Log.e(
+                                    "DiscordGateway",
+                                    "Failed to handle dispatch ${payload.t} (s=${payload.s})",
+                                    e,
+                                )
+                            }
                         }
 
                         7 -> { // RECONNECT
-                            close(CloseReason(CloseReason.Codes.NORMAL, "Reconnect requested"))
+                            // NOT close code 1000/1001: those invalidate the
+                            // session. Keep it resumable.
+                            close(CloseReason(4000.toShort(), "Reconnect requested"))
                         }
 
-                        9 -> { // INVALID SESSION
-                            lastSeq = null
-                            sendIdentify(token)
+                        9 -> { // INVALID_SESSION
+                            val resumable = (payload.d as? JsonPrimitive)?.content == "true"
+                            if (resumable) {
+                                sendResume(token)
+                            } else {
+                                canResume = false
+                                lastSeq = null
+                                // Docs: wait 1-5s before re-identifying.
+                                delay((1000L..5000L).random())
+                                sendIdentify(token)
+                            }
                         }
                     }
                 }
@@ -161,6 +210,8 @@ object DiscordGateway {
                 )
                 DiscordAPI.selfId = ready.user?.id
                 DiscordAPI.sessionId = ready.sessionId ?: ""
+                ready.resumeGatewayUrl?.let { resumeGatewayUrl = it }
+                canResume = true
                 ready.user?.let { u -> u.id?.let { DiscordAPI.userCache[it] = u } }
                 ready.guilds?.forEach { g -> g.id?.let { DiscordAPI.guildCache[it] = g } }
                 ready.privateChannels?.forEach { c -> c.id?.let { DiscordAPI.dmCache[it] = c } }
@@ -269,14 +320,14 @@ object DiscordGateway {
                 message.id?.let { id -> DiscordAPI.messageCache[id] = message }
                 val adapted = DiscordMappings.cacheMessage(message) ?: return@handleDispatch
                 val messageUlid = adapted.id ?: return@handleDispatch
-                val channelUlid = message.channelId?.let { DiscordMappings.ulidForRequest(it) }
-                    ?: return@handleDispatch
+                // Channel ids are raw snowflakes throughout the UI caches.
+                val channelId = message.channelId ?: return@handleDispatch
                 val data = StoatJson.encodeToJsonElement(Message.serializer(), adapted)
                     as? JsonObject ?: return@handleDispatch
                 StoatAPI.wsFrameChannel.tryEmit(
                     MessageUpdateFrame(
                         id = messageUlid,
-                        channel = channelUlid,
+                        channel = channelId,
                         data = data,
                     )
                 )
@@ -288,14 +339,15 @@ object DiscordGateway {
                     payload.d!!,
                 )
                 val snowflake = deleted.id ?: return@handleDispatch
-                val messageUlid = DiscordMappings.ulidForRequest(snowflake)
+                // Deterministic ULID for the message id; channels stay snowflakes.
+                val messageUlid = DiscordMappings.snowflakeToUlid(snowflake)
+                    ?: DiscordMappings.ulidForRequest(snowflake)
                     ?: return@handleDispatch
-                val channelUlid = deleted.channelId?.let { DiscordMappings.ulidForRequest(it) }
-                    ?: return@handleDispatch
+                val channelId = deleted.channelId ?: return@handleDispatch
                 DiscordAPI.messageCache.remove(snowflake)
                 StoatAPI.messageCache.remove(messageUlid)
                 StoatAPI.wsFrameChannel.tryEmit(
-                    MessageDeleteFrame(id = messageUlid, channel = channelUlid)
+                    MessageDeleteFrame(id = messageUlid, channel = channelId)
                 )
             }
 
@@ -304,13 +356,19 @@ object DiscordGateway {
                     TypingStartPayload.serializer(),
                     payload.d!!,
                 )
-                val channelUlid = typing.channelId?.let { DiscordMappings.ulidForRequest(it) }
-                    ?: return@handleDispatch
-                val userUlid = typing.userId?.let { DiscordMappings.ulidForRequest(it) }
-                    ?: return@handleDispatch
+                // Channel and user ids are raw snowflakes in the UI caches.
+                val channelId = typing.channelId ?: return@handleDispatch
+                val userId = typing.userId ?: return@handleDispatch
                 StoatAPI.wsFrameChannel.tryEmit(
-                    ChannelStartTypingFrame(id = channelUlid, user = userUlid)
+                    ChannelStartTypingFrame(id = channelId, user = userId)
                 )
+            }
+
+            "RESUMED" -> {
+                DiscordAPI.connected = true
+                DiscordAPI.connectionError = null
+                RealtimeSocket.updateDisconnectionState(DisconnectionState.Connected)
+                Log.i("DiscordGateway", "Session resumed; missed events replayed")
             }
 
             else -> {
@@ -387,15 +445,52 @@ object DiscordGateway {
         }
     }
 
+    private suspend fun WebSocketSession.sendHeartbeat() {
+        val payload = GatewayPayload(op = 1, d = lastSeq?.let { JsonPrimitive(it) })
+        send(DiscordJson.encodeToString(GatewayPayload.serializer(), payload))
+    }
+
+    /**
+     * Sends an Opcode 6 Resume so the server replays missed events from
+     * [lastSeq] instead of starting a fresh session.
+     */
+    private suspend fun WebSocketSession.sendResume(token: String) {
+        val body = buildJsonObject {
+            put("token", token)
+            put("session_id", DiscordAPI.sessionId)
+            put("seq", lastSeq)
+        }
+        send(
+            DiscordJson.encodeToString(
+                JsonObject.serializer(),
+                buildJsonObject {
+                    put("op", 6)
+                    put("d", body)
+                },
+            )
+        )
+        Log.i("DiscordGateway", "Sent RESUME (session=${DiscordAPI.sessionId}, seq=$lastSeq)")
+    }
+
     private suspend fun WebSocketSession.heartbeatLoop() {
+        // Docs: send the first heartbeat immediately after HELLO (with
+        // optional jitter), then every interval; if an ACK hasn't arrived by
+        // the next beat, the connection is a zombie - close (not 1000/1001!)
+        // and let the outer loop reconnect.
+        delay((heartbeatIntervalMs / 4L).coerceIn(0L..2000L).let { (0..it).random() })
         while (isActive) {
-            delay(heartbeatIntervalMs)
-            val payload = GatewayPayload(op = 1, d = lastSeq?.let { JsonPrimitive(it) })
+            if (!lastHeartbeatAcked) {
+                Log.w("DiscordGateway", "No heartbeat ACK; closing zombie connection")
+                close(CloseReason(4000.toShort(), "Zombie connection (no heartbeat ACK)"))
+                return
+            }
             try {
-                send(DiscordJson.encodeToString(GatewayPayload.serializer(), payload))
+                lastHeartbeatAcked = false
+                sendHeartbeat()
             } catch (e: Exception) {
                 break
             }
+            delay(heartbeatIntervalMs)
         }
     }
 }

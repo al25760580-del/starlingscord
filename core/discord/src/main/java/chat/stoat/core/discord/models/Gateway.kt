@@ -35,6 +35,8 @@ data class GatewayReady(
     val privateChannels: List<DiscordChannel>? = null,
     @SerialName("session_id")
     val sessionId: String? = null,
+    @SerialName("resume_gateway_url")
+    val resumeGatewayUrl: String? = null,
     val application: GatewayApplication? = null,
 )
 

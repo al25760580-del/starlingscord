@@ -62,3 +62,46 @@ fun GifLikeVideo(embed: Embed, modifier: Modifier = Modifier) {
             .clip(MaterialTheme.shapes.medium),
     )
 }
+
+/**
+ * Renders a regular video attachment (mp4/webm) with a proper player:
+ * controls, sound, no forced looping. Only gifv embeds (Tenor) use
+ * [GifLikeVideo].
+ */
+@Composable
+fun VideoAttachmentPlayer(embed: Embed, modifier: Modifier = Modifier) {
+    val url = embed.video?.url ?: embed.url ?: return
+    val context = LocalContext.current
+
+    val player = remember(url) {
+        ExoPlayer.Builder(context).build().apply {
+            setMediaItem(MediaItem.fromUri(url))
+            playWhenReady = false
+            prepare()
+        }
+    }
+    DisposableEffect(url) {
+        onDispose { player.release() }
+    }
+
+    val w = embed.video?.width?.toFloat() ?: embed.width?.toFloat() ?: 16f
+    val h = embed.video?.height?.toFloat() ?: embed.height?.toFloat() ?: 9f
+    val ratio = if (w > 0f && h > 0f) w / h else 16f / 9f
+
+    AndroidView(
+        factory = {
+            PlayerView(it).apply {
+                useController = true
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+            }
+        },
+        update = { it.player = player },
+        modifier = modifier
+            .widthIn(max = 320.dp)
+            .aspectRatio(ratio)
+            .clip(MaterialTheme.shapes.medium),
+    )
+}

@@ -624,6 +624,12 @@ fun Message(
                                         Spacer(modifier = Modifier.height(2.dp))
                                     }
 
+                                    "Video" -> {
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        VideoAttachmentPlayer(embed = embed)
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                    }
+
                                     else -> {
                                         // no-op
                                     }

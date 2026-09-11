@@ -31,7 +31,7 @@ import kotlinx.serialization.json.Json
 const val DISCORD_API = "https://discord.com/api/v9"
 
 /** Gateway URL (JSON encoding, gateway protocol v10). */
-const val DISCORD_GATEWAY = "wss://gateway.discord.gg/?v=10&encoding=json"
+const val DISCORD_GATEWAY = "wss://gateway.discord.gg/?v=9&encoding=json"
 
 /** Authorization header name used by the Discord API. */
 const val DISCORD_TOKEN_HEADER = "Authorization"
