@@ -107,6 +107,13 @@ object DiscordGateway {
         val gatewayUrl = if (canResume && resumeGatewayUrl != null) {
             resumeGatewayUrl!!
         } else {
+            // Fresh session: drop any sequence number left over from a dead
+            // session. Observed live: after a socket abort the first
+            // heartbeat of the NEW session carried the old session's seq
+            // ({"op":1,"d":3} before any dispatch arrived), which is a
+            // protocol violation waiting to bite (heartbeats must carry the
+            // current session's last seq, or null before the first event).
+            lastSeq = null
             cachedGatewayUrl ?: fetchGatewayUrl()?.also { cachedGatewayUrl = it } ?: DISCORD_GATEWAY
         }
         Log.i("DiscordGateway", "Connecting to $gatewayUrl (resume=$canResume)")
@@ -849,13 +856,20 @@ internal fun buildIdentifyPayload(token: String, deviceModel: String): JsonObjec
         }
     }
 
+/**
+ * Replaces the raw token with "<redacted>" in a serialized payload so the
+ * frame can be logged safely. No-op for a blank token.
+ */
+internal fun redactToken(json: String, token: String): String =
+    if (token.isBlank()) json else json.replace(token, "<redacted>")
+
     private suspend fun WebSocketSession.sendIdentify(token: String) {
         val payload = buildIdentifyPayload(token, android.os.Build.MODEL)
         val json = DiscordJson.encodeToString(JsonObject.serializer(), payload)
-        // Diagnostic trail: the exact identify frame that goes on the wire.
-        // Whether capabilities/compress are present is load-bearing (see
-        // buildIdentifyPayload).
-        Log.i("DiscordGateway", "Sent IDENTIFY: $json")
+        // Diagnostic trail with the token REDACTED - the raw identify frame
+        // must never land in logcat (the shape is what matters: presence of
+        // capabilities/compress etc., see buildIdentifyPayload).
+        Log.i("DiscordGateway", "Sent IDENTIFY: ${redactToken(json, token)}")
         send(json)
     }
 

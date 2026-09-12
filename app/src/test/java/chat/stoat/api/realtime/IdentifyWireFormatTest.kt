@@ -81,4 +81,19 @@ class IdentifyWireFormatTest {
         assertTrue(encoded.contains("\"capabilities\":1734653"))
         assertTrue(encoded.contains("\"compress\":false"))
     }
+
+    @Test
+    fun tokenIsRedactedFromLoggedIdentify() {
+        // The raw identify frame must never reach logcat with a live token.
+        val token = "NDg4.TOKEN.abc123"
+        val encoded = Json.encodeToString(
+            JsonObject.serializer(),
+            DiscordGateway.buildIdentifyPayload(token, "Pixel 8"),
+        )
+        val logged = DiscordGateway.redactToken(encoded, token)
+        assertTrue(logged.contains("\"token\":\"<redacted>\""))
+        assertTrue("raw token must not survive redaction", !logged.contains(token))
+        // Blank token: nothing to redact, log as-is.
+        assertEquals(encoded, DiscordGateway.redactToken(encoded, ""))
+    }
 }

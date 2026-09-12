@@ -97,6 +97,9 @@ data class DiscordRole(
     @SerialName("unicode_emoji")
     val unicodeEmoji: String? = null,
     val position: Int? = null,
+    // REST sends this bitfield as a string; the v10 gateway sends it as a
+    // number (observed live in READY.guilds[].roles[]) - tolerate both.
+    @Serializable(with = PermissionBitfieldSerializer::class)
     val permissions: String? = null,
     val managed: Boolean? = null,
     val mentionable: Boolean? = null,
