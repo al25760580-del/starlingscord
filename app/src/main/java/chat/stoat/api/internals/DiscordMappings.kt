@@ -427,6 +427,10 @@ object DiscordMappings {
             channel = m.channelId,
             author = m.author?.id,
             content = m.content,
+            // Carried so the UI can match this message against the optimistic
+            // pending bubble created at send time (Discord echoes the nonce
+            // on both the REST response and the gateway MESSAGE_CREATE).
+            nonce = m.nonce,
             embeds = embeds.ifEmpty { null },
             mentions = m.mentions?.mapNotNull { it.id },
             pinned = m.pinned,

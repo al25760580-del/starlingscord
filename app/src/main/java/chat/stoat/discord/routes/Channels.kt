@@ -184,6 +184,7 @@ suspend fun HttpClient.sendMessage(
     content: String,
     messageReference: DiscordMessageReference? = null,
     attachments: List<DiscordAttachmentRef> = emptyList(),
+    nonce: String? = null,
 ): DiscordMessage? {
     return try {
         val response = post("$DISCORD_API/channels/$channelId/messages") {
@@ -191,6 +192,10 @@ suspend fun HttpClient.sendMessage(
             setBody(
                 DiscordMessageSend(
                     content = content,
+                    // Discord echoes the nonce on the REST response AND the
+                    // gateway MESSAGE_CREATE; the UI matches it against the
+                    // optimistic pending message to swap it out.
+                    nonce = nonce,
                     messageReference = messageReference,
                     // `id` is the attachment's index within the message.
                     attachments = attachments
@@ -212,8 +217,9 @@ suspend fun sendDiscordMessage(
     content: String,
     messageReference: DiscordMessageReference? = null,
     attachments: List<DiscordAttachmentRef> = emptyList(),
+    nonce: String? = null,
 ): DiscordMessage? {
-    return DiscordHttp.sendMessage(channelId, content, messageReference, attachments)
+    return DiscordHttp.sendMessage(channelId, content, messageReference, attachments, nonce)
 }
 
 /** Discord read-state acknowledgement: POST /channels/{id}/messages/{id}/ack. */

@@ -43,9 +43,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.SerialName
@@ -563,6 +565,16 @@ object DiscordGateway {
                 applyPresence(presence, "PRESENCE_UPDATE")
             }
 
+            "SESSIONS_REPLACE" -> {
+                // The account's session list (each session carries its own
+                // live status). This is the ONLY event a client gets when the
+                // status is changed from ANOTHER client of the same account
+                // (verified live: no self PRESENCE_UPDATE is sent). Diff
+                // against the previous snapshot to find which session's
+                // status changed and mirror it on the self user.
+                handleSessionsReplace(payload.d)
+            }
+
             "CHANNEL_PINS_UPDATE" -> {
                 Log.i("StoatPins", "CHANNEL_PINS_UPDATE ${payload.d}")
             }
@@ -726,9 +738,97 @@ object DiscordGateway {
         }
     }
 
+    /**
+     * Previous SESSIONS_REPLACE snapshot (session_id -> status), used to tell
+     * WHICH session changed presence when the account's session list is
+     * broadcast (every client of the account receives it on any change).
+     */
+    private var lastSessionStatuses: Map<String, String>? = null
+
+    /** Test hook: clears the SESSIONS_REPLACE diff baseline between tests. */
+    fun resetSessionStatusesForTest() {
+        lastSessionStatuses = null
+    }
+
+    /**
+     * SESSIONS_REPLACE: d is the array of the account's sessions, each with
+     * its own live status/activities. Verified live: when a status is set
+     * from another client (op 3 there), this is the only event we get - so
+     * without this handler cross-client status changes never showed up.
+     *
+     * Rule: mirror the status of the session that CHANGED (added/removed
+     * sessions are ignored - a device merely connecting shouldn't flip our
+     * picker); prefer a session other than ours (i.e. what the other client
+     * set), falling back to our own session (the echo of our own op 3).
+     */
+    internal fun handleSessionsReplace(d: JsonElement?) {
+        val arr = d as? JsonArray ?: return
+        val current = buildMap {
+            arr.forEach { el ->
+                val obj = el as? JsonObject ?: return@forEach
+                val sid = (obj["session_id"] as? JsonPrimitive)?.contentOrNull ?: return@forEach
+                val status = (obj["status"] as? JsonPrimitive)?.contentOrNull ?: return@forEach
+                put(sid, status)
+            }
+        }
+        val previous = lastSessionStatuses
+        lastSessionStatuses = current
+        if (previous == null) return // first snapshot after READY: nothing to diff
+
+        val changed = current.filter { (sid, status) ->
+            when {
+                // A session present in both snapshots with a different
+                // status = a real status change.
+                sid in previous -> previous[sid] != status
+                // A newly-appeared session announcing a NON-default status
+                // set it explicitly (e.g. a client connecting while
+                // invisible/idle) - mirror that. Appearing as "online" is
+                // just a device connecting; ignore it so it can't flip our
+                // picker.
+                else -> status != "online"
+            }
+        }
+        if (changed.isEmpty()) return
+        val pick = changed.keys.firstOrNull { it != DiscordAPI.sessionId }
+            ?: changed.keys.firstOrNull()
+            ?: return
+        val status = changed[pick] ?: return
+        var customText: String? = null
+        arr.forEach { el ->
+            val obj = el as? JsonObject ?: return@forEach
+            if ((obj["session_id"] as? JsonPrimitive)?.contentOrNull == pick) {
+                (obj["activities"] as? JsonArray)?.forEach { act ->
+                    val actObj = act as? JsonObject ?: return@forEach
+                    if ((actObj["type"] as? JsonPrimitive)?.contentOrNull == "4") {
+                        customText = (actObj["state"] as? JsonPrimitive)?.contentOrNull
+                    }
+                }
+            }
+        }
+
+        val selfId = StoatAPI.selfId ?: return
+        val base = StoatAPI.userCache[selfId] ?: User(id = selfId)
+        StoatAPI.userCache[selfId] = base.copy(
+            online = status == "online" || status == "idle" || status == "dnd",
+            status = Status(
+                text = customText ?: base.status?.text,
+                presence = when (status) {
+                    "online" -> "Online"
+                    "idle" -> "Idle"
+                    "dnd" -> "Busy"
+                    else -> null // invisible / offline
+                },
+            ),
+        )
+        Log.i(
+            "StoatPresence",
+            "[SESSIONS_REPLACE] session=${pick.take(12)} changed -> $status " +
+                "(mine=${pick == DiscordAPI.sessionId})",
+        )
+    }
+
     /** Map a Discord presence onto the app's user cache (status dot + custom text). */
-    private fun applyPresence(p: DiscordPresence, source: String) {
-        val uid = p.user?.id ?: return
+    private fun applyPresence(p: DiscordPresence, source: String) {        val uid = p.user?.id ?: return
         val online = p.status == "online" || p.status == "idle" || p.status == "dnd"
         val mapped = when (p.status) {
             "online" -> "Online"
@@ -910,6 +1010,27 @@ internal fun redactToken(json: String, token: String): String =
             Log.i("DiscordGateway", "Sent PRESENCE_UPDATE status=$discordStatus")
         } catch (e: Exception) {
             Log.e("DiscordGateway", "Failed to send PRESENCE_UPDATE", e)
+        }
+        // Reflect the change locally right away (the REST self-refresh in
+        // patchSelf carries no presence, and the server only broadcasts
+        // SESSIONS_REPLACE - no self PRESENCE_UPDATE), so the status picker
+        // shows what was just picked instead of falling back to "invisible".
+        val selfId = StoatAPI.selfId
+        if (selfId != null) {
+            val base = StoatAPI.userCache[selfId] ?: User(id = selfId)
+            StoatAPI.userCache[selfId] = base.copy(
+                online = discordStatus == "online" || discordStatus == "idle" || discordStatus == "dnd",
+                status = Status(
+                    text = customStatusText ?: base.status?.text,
+                    presence = when (discordStatus) {
+                        "online" -> "Online"
+                        "idle" -> "Idle"
+                        "dnd" -> "Busy"
+                        else -> null // invisible / offline
+                    },
+                ),
+            )
+            Log.i("StoatPresence", "Local self presence set to $discordStatus")
         }
         // User accounts persist status via PATCH /users/@me/settings (what
         // the official client does); the gateway op 3 only affects the live

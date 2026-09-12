@@ -9,6 +9,10 @@ data class DiscordMessage(
     @SerialName("channel_id")
     val channelId: String? = null,
     val author: DiscordUser? = null,
+    // Client-generated id echoed back on the REST response AND the gateway
+    // MESSAGE_CREATE - lets the UI swap its optimistic "pending" bubble for
+    // the real message no matter which arrives first.
+    val nonce: String? = null,
     @SerialName("webhook_id")
     val webhookId: String? = null,
     val content: String? = null,

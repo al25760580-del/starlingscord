@@ -72,6 +72,12 @@ android {
         }
     }
 
+    testOptions {
+        // Gateway/pipeline code logs via android.util.Log; in JVM unit tests
+        // those calls become no-ops instead of "not mocked" crashes.
+        unitTests.isReturnDefaultValues = true
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true

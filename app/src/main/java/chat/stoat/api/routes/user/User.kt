@@ -92,10 +92,21 @@ suspend fun patchSelf(
         )
     }
 
-    // Refresh the cached self user from Discord.
+    // Refresh the cached self user from Discord. The REST user object
+    // carries NO presence data, so preserve the locally-known status/online
+    // (kept fresh by the gateway presence pipeline) - replacing them with
+    // the presence-less REST shape made the UI show "invisible" right after
+    // any self edit.
     if (!pure) {
         DiscordHttp.fetchCurrentUser()?.let { u ->
-            u.id?.let { StoatAPI.userCache[it] = DiscordMappings.adaptUser(u) ?: return@let }
+            u.id?.let { uid ->
+                val prev = StoatAPI.userCache[uid]
+                val adapted = DiscordMappings.adaptUser(u) ?: return@let
+                StoatAPI.userCache[uid] = adapted.copy(
+                    status = prev?.status,
+                    online = prev?.online ?: false,
+                )
+            }
         }
     }
 }

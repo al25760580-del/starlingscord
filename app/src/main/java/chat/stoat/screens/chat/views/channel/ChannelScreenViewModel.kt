@@ -613,6 +613,10 @@ class ChannelScreenViewModel(
                         content = content,
                         messageReference = replyReference,
                         attachments = uploadRefs,
+                        // The nonce is echoed on the REST response AND the
+                        // gateway MESSAGE_CREATE; whichever the UI sees first
+                        // swaps out the prospective (pending) bubble.
+                        nonce = nonce,
                     )
                     val adapted =
                         sent?.let { DiscordMappings.adaptMessage(it) }?.copy(nonce = nonce)
@@ -956,6 +960,20 @@ class ChannelScreenViewModel(
 
                         if (canLoadNewer) {
                             hasUnseenNewMessages = true
+                            // Still swap out the optimistic pending bubble:
+                            // the confirmed message is now in messageCache and
+                            // will be inserted when the user returns to the
+                            // live tail; leaving the pending copy up makes
+                            // own sends look stuck forever.
+                            if (it.nonce != null) {
+                                updateItems(items.filter { m ->
+                                    if (m is ChannelScreenItem.ProspectiveMessage) {
+                                        m.message.id != it.nonce
+                                    } else {
+                                        true
+                                    }
+                                })
+                            }
                             return@onEach
                         }
 
