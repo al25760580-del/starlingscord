@@ -20,6 +20,8 @@ import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.DefaultRequest
 import io.ktor.client.plugins.HttpRequestRetry
+import io.ktor.client.plugins.HttpRequestTimeoutException
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.logging.LogLevel
@@ -80,7 +82,21 @@ val DiscordHttp = HttpClient(OkHttp) {
     install(WebSockets)
     install(HttpRequestRetry) {
         retryOnServerErrors(maxRetries = 3)
+        // A timed-out request (server holding the connection - seen live on
+        // freshly-flagged accounts) gets a couple of retries before failing.
+        retryOnExceptionIf(maxRetries = 2) { _, cause ->
+            cause is HttpRequestTimeoutException
+        }
         exponentialDelay()
+    }
+    // Hard bound on every REST call. Without this, a request the server
+    // holds forever (observed on an account right after Discord flags the
+    // "new login detected" security flow) leaves the app hung on the login
+    // screen with zero diagnostics - the login coroutine never returns.
+    // WebSockets opt out per-request (see DiscordGateway.connect).
+    install(HttpTimeout) {
+        connectTimeoutMillis = 10_000
+        requestTimeoutMillis = 20_000
     }
     install(Logging) { level = LogLevel.INFO }
 

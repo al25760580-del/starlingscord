@@ -117,11 +117,28 @@ object StoatAPI {
     }
 
     suspend fun loginAs(token: String) {
+        // Step-by-step diagnostic trail: if login ever stalls again we need
+        // to know WHICH call hung (live incident: an account flagged by
+        // Discord's "new login detected" security flow left a REST call
+        // hanging forever and the app sat on the login screen silently).
+        val t0 = System.currentTimeMillis()
+        fun elapsed() = "${System.currentTimeMillis() - t0}ms"
+        Log.i("StoatLogin", "loginAs: start")
         setSessionHeader(token)
-        fetchSelf()
-        DiscordMappings.populateFromRest()
-        startSocketOps()
-        unreads.sync()
+        try {
+            Log.i("StoatLogin", "loginAs: fetching self (+profile)…")
+            fetchSelf()
+            Log.i("StoatLogin", "loginAs: self ok (${elapsed()}); populating caches from REST…")
+            DiscordMappings.populateFromRest()
+            Log.i("StoatLogin", "loginAs: caches ok (${elapsed()}); starting socket ops…")
+            startSocketOps()
+            Log.i("StoatLogin", "loginAs: socket ops started (${elapsed()}); syncing unreads…")
+            unreads.sync()
+            Log.i("StoatLogin", "loginAs: COMPLETE (${elapsed()})")
+        } catch (e: Exception) {
+            Log.e("StoatLogin", "loginAs: FAILED at ${elapsed()}: ${e::class.simpleName}: ${e.message}")
+            throw e
+        }
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
