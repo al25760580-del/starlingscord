@@ -9,7 +9,6 @@ import chat.stoat.api.realtime.frames.receivable.MessageDeleteFrame
 import chat.stoat.api.realtime.frames.receivable.MessageReactFrame
 import chat.stoat.api.realtime.frames.receivable.MessageUnreactFrame
 import chat.stoat.api.realtime.frames.receivable.MessageUpdateFrame
-import chat.stoat.core.discord.models.ClientState
 import chat.stoat.core.discord.models.DiscordChannel
 import chat.stoat.core.discord.models.DiscordGuild
 import chat.stoat.core.discord.models.DiscordGuildEmoji
@@ -19,12 +18,8 @@ import chat.stoat.core.discord.models.DiscordPresence
 import chat.stoat.core.discord.models.DiscordPresenceUser
 import chat.stoat.core.discord.models.DiscordReactionEmoji
 import chat.stoat.core.discord.models.GatewayHello
-import chat.stoat.core.discord.models.GatewayIdentify
 import chat.stoat.core.discord.models.GatewayPayload
 import chat.stoat.core.discord.models.GatewayReady
-import chat.stoat.core.discord.models.IdentifyData
-import chat.stoat.core.discord.models.IdentifyProperties
-import chat.stoat.core.discord.models.PresenceData
 import chat.stoat.core.model.schemas.Message
 import chat.stoat.core.model.schemas.Status
 import chat.stoat.core.model.schemas.User
@@ -808,31 +803,59 @@ object DiscordGateway {
         return updated
     }
 
+/**
+ * Builds the opcode 2 IDENTIFY frame field by field, deliberately bypassing
+ * the @Serializable models. Reason (found the hard way, live-tested with a
+ * real session): DiscordJson runs with kotlinx defaults, which OMIT any
+ * property equal to its default value (encodeDefaults=false) - the same bug
+ * class that broke heartbeats. On the identify that silently dropped:
+ *
+ *  - "capabilities" (=16381) and "compress" (=false) -> with them missing the
+ *    gateway serves a degraded session: READY arrives but NO GUILD_CREATE is
+ *    ever dispatched, so guild subscriptions (op 37) are never sent and
+ *    member lists / lazy presences never arrive. With
+ *    capabilities=1734653 (current official web client value) GUILD_CREATE,
+ *    PASSIVE_UPDATE_V2, THREAD_LIST_SYNC etc. flow normally.
+ *  - "$os"/"$browser" (defaults "Android"/"Discord Android") -> the official
+ *    client always sends the full properties object.
+ *
+ * Verified live (60s windows, same token): capabilities omitted -> 0
+ * GUILD_CREATE; 16381 -> live MESSAGE_CREATE/PRESENCE_UPDATE but still 0
+ * GUILD_CREATE; 1734653 -> full event stream including GUILD_CREATE, which
+ * is what triggers our op 37 subscription.
+ */
+internal fun buildIdentifyPayload(token: String, deviceModel: String): JsonObject =
+    buildJsonObject {
+        put("op", 2)
+        putJsonObject("d") {
+            put("token", token)
+            putJsonObject("properties") {
+                put("\$os", "Android")
+                put("\$browser", "Discord Android")
+                put("\$device", deviceModel)
+            }
+            putJsonObject("presence") {
+                put("status", "unknown")
+                put("since", 0)
+                putJsonArray("activities") {}
+                put("afk", false)
+            }
+            putJsonObject("client_state") {
+                put("api_code_version", 0)
+                putJsonObject("guild_versions") {}
+            }
+            put("compress", false)
+            put("capabilities", 1734653)
+        }
+    }
+
     private suspend fun WebSocketSession.sendIdentify(token: String) {
-        // Mirror the official user client's identify presence exactly: empty
-        // activity list, status "unknown", since 0. A non-standard presence (a
-        // custom-activity type:4, or status "online") can make Discord drop the
-        // connection immediately after HELLO.
-        val identify = GatewayIdentify(
-            d = IdentifyData(
-                token = token,
-                properties = IdentifyProperties(device = android.os.Build.MODEL),
-                compress = false,
-                capabilities = 16381,
-                presence = PresenceData(
-                    status = "unknown",
-                    since = 0,
-                    activities = emptyList(),
-                    afk = false,
-                ),
-                clientState = ClientState(
-                    guildVersions = emptyMap(),
-                    apiCodeVersion = 0,
-                ),
-            ),
-        )
-        val json = DiscordJson.encodeToString(GatewayIdentify.serializer(), identify)
-        Log.i("DiscordGateway", "Sent IDENTIFY")
+        val payload = buildIdentifyPayload(token, android.os.Build.MODEL)
+        val json = DiscordJson.encodeToString(JsonObject.serializer(), payload)
+        // Diagnostic trail: the exact identify frame that goes on the wire.
+        // Whether capabilities/compress are present is load-bearing (see
+        // buildIdentifyPayload).
+        Log.i("DiscordGateway", "Sent IDENTIFY: $json")
         send(json)
     }
 
