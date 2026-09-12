@@ -7,6 +7,7 @@ import chat.stoat.core.discord.models.DiscordMessageReference
 import chat.stoat.discord.DiscordAPI
 import chat.stoat.discord.DISCORD_API
 import chat.stoat.discord.DiscordHttp
+import android.util.Log
 import chat.stoat.discord.DiscordJson
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
@@ -25,6 +26,9 @@ import io.ktor.utils.io.writeFully
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
 
 @Serializable
@@ -237,19 +241,74 @@ suspend fun HttpClient.fetchDiscordMessage(channelId: String, messageId: String)
     }
 }
 
-/** Add a reaction to a Discord message. [emoji] is either a unicode char or the
- *  snowflake id of a custom emoji (resolved to `name:id` via [DiscordAPI.emojiCache]). */
-suspend fun HttpClient.reactDiscord(channelId: String, messageId: String, emoji: String) {
-    val identifier = DiscordAPI.emojiCache[emoji]?.name?.let { "$it:$emoji" } ?: emoji
+/**
+ * Normalizes a reaction emoji reference into Discord's wire format:
+ * `<:name:id>` / `<a:name:id>` (from the picker), a bare custom emoji snowflake
+ * or `name:id` all become `name:id`; unicode emoji pass through untouched.
+ */
+private fun reactionIdentifier(emoji: String): String {
+    Regex("^<a?:([^:]+):(\\d+)>$").find(emoji)?.let {
+        return "${it.groupValues[1]}:${it.groupValues[2]}"
+    }
+    DiscordAPI.emojiCache[emoji]?.name?.let { return "$it:$emoji" }
+    return emoji
+}
+
+/** Add a reaction to a Discord message. [emoji] is a unicode char, `<:name:id>`
+ *  (picker) or a custom emoji snowflake (reaction chip). Returns whether the
+ *  server accepted it (403 = missing ADD_REACTIONS / USE_EXTERNAL_EMOJIS). */
+suspend fun HttpClient.reactDiscord(channelId: String, messageId: String, emoji: String): Boolean {
+    val identifier = reactionIdentifier(emoji)
     val enc = java.net.URLEncoder.encode(identifier, "UTF-8").replace("+", "%20")
-    put("$DISCORD_API/channels/$channelId/messages/$messageId/reactions/$enc/@me")
+    val response = put("$DISCORD_API/channels/$channelId/messages/$messageId/reactions/$enc/@me")
+    val ok = response.status.isSuccess()
+    if (ok) {
+        Log.i("StoatReact", "react '$identifier' ok (msg=$messageId)")
+    } else {
+        // 403 = no ADD_REACTIONS / USE_EXTERNAL_EMOJIS; 10008 = unknown message.
+        Log.w("StoatReact", "react '$identifier' FAILED: HTTP ${response.status.value} (msg=$messageId)")
+    }
+    return ok
 }
 
 /** Remove the authenticated user's reaction from a Discord message. */
-suspend fun HttpClient.unreactDiscord(channelId: String, messageId: String, emoji: String) {
-    val identifier = DiscordAPI.emojiCache[emoji]?.name?.let { "$it:$emoji" } ?: emoji
+suspend fun HttpClient.unreactDiscord(channelId: String, messageId: String, emoji: String): Boolean {
+    val identifier = reactionIdentifier(emoji)
     val enc = java.net.URLEncoder.encode(identifier, "UTF-8").replace("+", "%20")
-    delete("$DISCORD_API/channels/$channelId/messages/$messageId/reactions/$enc/@me")
+    val response = delete("$DISCORD_API/channels/$channelId/messages/$messageId/reactions/$enc/@me")
+    val ok = response.status.isSuccess()
+    if (!ok) {
+        Log.w("StoatReact", "unreact '$identifier' FAILED: HTTP ${response.status.value} (msg=$messageId)")
+    }
+    return ok
+}
+
+/** Pinned messages for a channel (docs: GET /channels/{channel.id}/pins). */
+suspend fun HttpClient.fetchDiscordPins(channelId: String): List<DiscordMessage> {
+    return try {
+        val response = get("$DISCORD_API/channels/$channelId/pins")
+        val messages = DiscordJson.decodeFromString(
+            ListSerializer(DiscordMessage.serializer()),
+            response.bodyAsText(),
+        )
+        Log.i("StoatPins", "fetched ${messages.size} pinned messages (channel=$channelId)")
+        messages
+    } catch (e: Exception) {
+        Log.e("StoatPins", "failed to fetch pins (channel=$channelId)", e)
+        emptyList()
+    }
+}
+
+/** The account's own status (online/idle/dnd/invisible), from user settings. */
+suspend fun fetchSelfStatus(): String? {
+    return try {
+        val body = DiscordHttp.get("$DISCORD_API/users/@me/settings").bodyAsText()
+        DiscordJson.parseToJsonElement(body)
+            .jsonObject["status"]?.jsonPrimitive?.contentOrNull
+    } catch (e: Exception) {
+        Log.w("StoatPresence", "failed to fetch /users/@me/settings: ${e.message}")
+        null
+    }
 }
 
 /**

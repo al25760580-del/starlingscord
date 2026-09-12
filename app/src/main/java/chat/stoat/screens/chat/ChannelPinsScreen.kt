@@ -45,7 +45,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import chat.stoat.R
 import chat.stoat.api.StoatAPI
-import chat.stoat.api.routes.channel.searchChannel
+import chat.stoat.api.internals.DiscordMappings
+import chat.stoat.discord.DiscordHttp
+import chat.stoat.discord.routes.fetchDiscordPins
 import chat.stoat.composables.chat.SystemMessage
 import chat.stoat.core.model.schemas.Message
 import chat.stoat.internals.extensions.zero
@@ -63,24 +65,23 @@ class ChannelPinsScreenViewModel : ViewModel() {
 
         viewModelScope.launch {
             try {
-                val response =
-                    searchChannel(channelId, pinned = true, limit = 100, includeUsers = true)
+                // Discord: GET /channels/{id}/pins returns the pinned message
+                // objects directly (there is no "pinned" search filter).
+                val discordMessages = DiscordHttp.fetchDiscordPins(channelId)
 
-                response.users?.forEach { user ->
-                    user.id?.let { id ->
-                        StoatAPI.userCache.putIfAbsent(id, user)
-                    }
-                }
-
-                response.members?.forEach { member ->
-                    member.id?.let { memberId ->
-                        if (!StoatAPI.members.hasMember(memberId.server, memberId.user)) {
-                            StoatAPI.members.setMember(memberId.server, member)
+                discordMessages.forEach { m ->
+                    m.author?.let { author ->
+                        author.id?.let { aid ->
+                            StoatAPI.userCache.putIfAbsent(
+                                aid,
+                                DiscordMappings.adaptUser(author) ?: return@let,
+                            )
                         }
                     }
+                    DiscordMappings.cacheMessage(m)?.let { pinnedMessages.add(it) }
                 }
 
-                pinnedMessages.addAll(response.messages ?: emptyList())
+                Log.i("StoatPins", "loaded ${pinnedMessages.size} pinned messages (channel=$channelId)")
             } catch (e: Exception) {
                 Log.e("ChannelPinsScreen", "Failed to load pinned messages", e)
                 error = e.message

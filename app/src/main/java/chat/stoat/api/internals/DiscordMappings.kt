@@ -76,6 +76,13 @@ object DiscordMappings {
      * This keeps reply references, message cache keys and idMap round-trips
      * consistent no matter which code path adapted the message.
      */
+    /**
+     * Prefix for placeholder reactor ids that carry Discord's server-side
+     * reaction counts into the UI's Map<String, List<String>> model. Real
+     * user ids replace these as MESSAGE_REACTION_ADD events arrive.
+     */
+    const val REACTION_GHOST_PREFIX = "react-ghost:"
+
     fun snowflakeToUlid(snowflake: String?): String? {
         val ts = snowflakeTimestamp(snowflake) ?: return null
         val sf = snowflake?.toLongOrNull() ?: return null
@@ -309,7 +316,17 @@ object DiscordMappings {
     fun cacheMemberUser(member: DiscordMember?) {
         val u = member?.user ?: return
         val uid = u.id ?: return
-        StoatAPI.userCache[uid] = adaptUser(u) ?: return
+        val adapted = adaptUser(u) ?: return
+        val existing = StoatAPI.userCache[uid]
+        if (existing != null) {
+            // Preserve the presence (from PRESENCE_UPDATE) and online flag.
+            StoatAPI.userCache[uid] = adapted.copy(
+                online = existing.online,
+                status = existing.status,
+            )
+        } else {
+            StoatAPI.userCache[uid] = adapted
+        }
     }
 
     /** Map a Discord guild member onto the app's [Member] model. */
@@ -414,7 +431,7 @@ object DiscordMappings {
             mentions = m.mentions?.mapNotNull { it.id },
             pinned = m.pinned,
             replies = replies,
-            reactions = m.reactions?.let { mapDiscordReactions(it) },
+            reactions = m.reactions?.let { mapDiscordReactions(m, it) },
         )
         m.id?.let { DiscordAPI.idMap[id] = it }
 
@@ -449,12 +466,40 @@ object DiscordMappings {
      * the list contains the self user when [DiscordReaction.me] is true so the
      * Reaction UI can show the "own reaction" highlight + toggle.
      */
-    private fun mapDiscordReactions(reactions: List<DiscordReaction>): Map<String, List<String>> {
+    private fun mapDiscordReactions(
+        m: DiscordMessage,
+        reactions: List<DiscordReaction>,
+    ): Map<String, List<String>> {
+        val gid = m.channelId?.let { StoatAPI.channelCache[it]?.server }
+        val selfId = StoatAPI.selfId
         val map = mutableMapOf<String, List<String>>()
         reactions.forEach { r ->
             val emoji = r.emoji ?: return@forEach
             val key = emoji.id ?: emoji.name ?: return@forEach
-            map[key] = if (r.me) listOf(StoatAPI.selfId ?: "") else emptyList()
+            // Register custom emojis (even foreign ones) so reaction chips can
+            // load the CDN asset and the react routes can build name:id.
+            val eid = emoji.id
+            if (eid != null && emoji.name != null && eid !in DiscordAPI.emojiCache) {
+                DiscordAPI.emojiCache[eid] = DiscordGuildEmoji(
+                    id = eid,
+                    name = emoji.name,
+                    animated = emoji.animated,
+                    guildId = gid,
+                )
+            }
+            // The app model counts a reaction as the size of its reactor id
+            // list, but Discord only ships a count: pad with ghost ids.
+            val list = mutableListOf<String>()
+            if (r.me && selfId != null) list.add(selfId)
+            while (list.size < r.count) {
+                list.add("$REACTION_GHOST_PREFIX${'$'}key-${'$'}{list.size}")
+            }
+            map[key] = list
+            Log.d(
+                "StoatReact",
+                "reaction emoji=${'$'}key count=${'$'}{r.count} me=${'$'}{r.me} " +
+                    "ghosts=${'$'}{list.size - if (r.me && selfId != null) 1 else 0}",
+            )
         }
         return map
     }

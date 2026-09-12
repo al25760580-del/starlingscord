@@ -80,6 +80,9 @@ fun EmojiPicker(
     onSearchFocus: (Boolean) -> Unit = {},
     bottomInset: Dp = 0.dp,
     serverId: String? = null,
+    /** Reactions have no Nitro gating: every emoji is tappable and the server
+     *  enforces ADD_REACTIONS / USE_EXTERNAL_EMOJIS (result is logged). */
+    forReaction: Boolean = false,
     onEmojiSelected: (String) -> Unit,
 ) {
     val view = LocalView.current
@@ -539,6 +542,7 @@ fun EmojiPicker(
                     onClick = onEmojiClick,
                     onServerEmoteInfo = onServerEmoteInfo,
                     currentServerId = serverId,
+                    forReaction = forReaction,
                     lesserHeaders = true
                 )
             }
@@ -570,7 +574,8 @@ fun EmojiPicker(
                     skinToneFactory = { emojiImpl.applyFitzpatrickSkinTone(it, currentSkinTone) },
                     onClick = onEmojiClick,
                     onServerEmoteInfo = onServerEmoteInfo,
-                    currentServerId = serverId
+                    currentServerId = serverId,
+                    forReaction = forReaction
                 )
             }
 
@@ -594,6 +599,7 @@ fun ColumnScope.PickerItem(
     onClick: (EmojiPickerItem) -> Unit,
     onServerEmoteInfo: (String) -> Unit,
     currentServerId: String? = null,
+    forReaction: Boolean = false,
     lesserHeaders: Boolean = false
 ) {
     when (item) {
@@ -623,8 +629,9 @@ fun ColumnScope.PickerItem(
             val premiumType = DiscordAPI.selfPremiumType
             val nitroFull = premiumType == 1 || premiumType == 2 // Classic / Nitro
             val nitroAny = nitroFull || premiumType == 3 // + Basic (emoji anywhere)
-            val usable = (item.emote.parent?.id == currentServerId || nitroAny) &&
-                    (item.emote.animated != true || nitroFull)
+            val usable = forReaction ||
+                    ((item.emote.parent?.id == currentServerId || nitroAny) &&
+                            (item.emote.animated != true || nitroFull))
 
             Column(
                 modifier = Modifier

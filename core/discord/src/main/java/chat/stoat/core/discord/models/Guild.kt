@@ -39,6 +39,9 @@ data class DiscordGuild(
     /** Present on the full guild object (GUILD_CREATE, GET /guilds/{id}). */
     val emojis: List<DiscordGuildEmoji>? = null,
 
+    /** Member presences shipped with GUILD_CREATE for user accounts. */
+    val presences: List<DiscordPresence>? = null,
+
     /** Total permissions for the requesting user, excluding channel overwrites. */
     val permissions: String? = null,
 
@@ -104,4 +107,26 @@ data class DiscordRoleColors(
     @SerialName("primary_color") val primaryColor: Long? = null,
     @SerialName("secondary_color") val secondaryColor: Long? = null,
     @SerialName("tertiary_color") val tertiaryColor: Long? = null,
+)
+
+@Serializable
+data class DiscordPresence(
+    /** Partial user; only the id is needed. */
+    val user: DiscordPresenceUser? = null,
+    /** online | idle | dnd | offline | invisible */
+    val status: String? = null,
+    val activities: List<DiscordActivity>? = null,
+)
+
+@Serializable
+data class DiscordPresenceUser(
+    val id: String? = null,
+)
+
+@Serializable
+data class DiscordActivity(
+    /** 4 = custom status. */
+    val type: Int? = null,
+    val name: String? = null,
+    val state: String? = null,
 )

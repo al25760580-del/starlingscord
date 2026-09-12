@@ -938,9 +938,16 @@ class ChannelScreenViewModel(
     private suspend fun listenToWsEvents() {
         StoatAPI.wsFrameChannel.onEach {
             try {
+                Log.d("ChannelScreen", "WS frame: ${it::class.simpleName}")
                 when (it) {
                     is MessageFrame -> {
-                        if (it.channel != channel?.id) return@onEach
+                        if (it.channel != channel?.id) {
+                            Log.d(
+                                "ChannelScreen",
+                                "MessageFrame for other channel (${it.channel} != ${channel?.id}); dropped",
+                            )
+                            return@onEach
+                        }
                         it.author?.let(::clearTypingUser)
 
                         // If we already have the message we are just catching up on the WebSocket connection. Skip
@@ -970,7 +977,14 @@ class ChannelScreenViewModel(
                     }
 
                     is MessageDeleteFrame -> {
-                        if (it.channel != channel?.id) return@onEach
+                        if (it.channel != channel?.id) {
+                            Log.d(
+                                "ChannelScreen",
+                                "MessageDeleteFrame for other channel (${it.channel} != ${channel?.id}); dropped",
+                            )
+                            return@onEach
+                        }
+                        Log.d("ChannelScreen", "removing deleted message ${it.id}")
 
                         val newRenderableMessages =
                             items.filter { m ->
@@ -1045,7 +1059,10 @@ class ChannelScreenViewModel(
                                 msg.message.id == it.id
                             }
 
-                        if (!hasMessage) return@onEach
+                        if (!hasMessage) {
+                            Log.d("ChannelScreen", "MessageReactFrame for unrendered message ${it.id}; skipped")
+                            return@onEach
+                        }
 
                         updateItems(
                             items.map { currentMsg ->

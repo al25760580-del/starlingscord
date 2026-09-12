@@ -1,5 +1,6 @@
 package chat.stoat.api.internals
 
+import android.util.Log
 import chat.stoat.api.StoatAPI
 import chat.stoat.core.model.schemas.Channel
 import chat.stoat.core.model.schemas.ChannelType
@@ -33,18 +34,35 @@ object Roles {
         }
     }
 
+    /** Deduplicated miss logging so this hot render path doesn't spam logcat. */
+    private val loggedLookupMisses = mutableSetOf<String>()
+    private fun logLookupMiss(reason: String) {
+        if (loggedLookupMisses.add(reason)) {
+            Log.w("StoatRoles", "role lookup failed: $reason")
+        }
+    }
+
     fun resolveHighestRole(
         serverId: String,
         userId: String,
         withColour: Boolean = false,
         hoisted: Boolean = false
     ): Role? {
-        val server = StoatAPI.serverCache[serverId] ?: return null
-        val member = StoatAPI.members.getMember(serverId, userId) ?: return null
+        val server = StoatAPI.serverCache[serverId] ?: run {
+            logLookupMiss("server '$serverId' not in serverCache")
+            return null
+        }
+        val member = StoatAPI.members.getMember(serverId, userId) ?: run {
+            logLookupMiss("member '$serverId/$userId' not cached yet")
+            return null
+        }
 
         val roles = member.roles?.map { roleId ->
             server.roles?.get(roleId)
-        } ?: return null
+        } ?: run {
+            logLookupMiss("member '$serverId/$userId' has no roles list")
+            return null
+        }
 
         return highestRoleWithPredicate(roles) { role ->
             val hoistPredicate = if (hoisted) (role.hoist == true) else true
