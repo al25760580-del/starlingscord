@@ -248,9 +248,23 @@ class EmojiImpl {
         val list = mutableListOf<EmojiPickerItem>()
 
         for (server in serversWithEmotes()) {
-            val emotes = StoatAPI.emojiCache.values.filter { it.parent?.id == server.id }
-            val matchingEmotes =
-                emotes.filter { it.name?.contains(query, ignoreCase = true) ?: false }
+            // Match straight from the Discord emoji cache for this guild;
+            // StoatAPI.emojiCache is the Revolt-backend cache and stays empty
+            // on the Discord backend.
+            val matchingEmotes = DiscordAPI.emojiCache.values
+                .filter { it.guildId == server.id && it.name != null }
+                .filter { it.name?.contains(query, ignoreCase = true) == true }
+                .map { e ->
+                    chat.stoat.core.model.schemas.Emoji(
+                        id = e.id,
+                        parent = chat.stoat.core.model.schemas.EmojiParent(
+                            type = "Server",
+                            id = e.guildId
+                        ),
+                        name = e.name,
+                        animated = e.animated,
+                    )
+                }
             if (matchingEmotes.isNotEmpty()) {
                 list.add(EmojiPickerItem.Section(Category.ServerEmoteCategory(server)))
                 list.addAll(matchingEmotes.map { EmojiPickerItem.ServerEmote(it) })
