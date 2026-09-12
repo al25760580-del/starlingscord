@@ -1,0 +1,99 @@
+package com.discord.simpleast.core.node;
+
+import android.text.SpannableStringBuilder;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Iterator;
+import kotlin.Metadata;
+import kotlin.Unit;
+import kotlin.collections.CollectionsKt;
+import kotlin.jvm.functions.Function1;
+import kotlin.jvm.internal.DefaultConstructorMarker;
+import kotlin.jvm.internal.Intrinsics;
+import org.jetbrains.annotations.NotNull;
+
+/* JADX INFO: loaded from: classes.dex */
+@Metadata(bv = {1, 0, 3}, d1 = {"\u00002\n\u0002\u0018\u0002\n\u0000\n\u0002\u0010\u0000\n\u0000\n\u0002\u0010\u001f\n\u0002\b\u0002\n\u0002\u0010\u0002\n\u0002\b\u0002\n\u0002\u0010\u001e\n\u0000\n\u0002\u0010\u000b\n\u0002\b\u0002\n\u0002\u0018\u0002\n\u0002\b\u0004\b\u0016\u0018\u0000*\u0004\b\u0000\u0010\u00012\u00020\u0002:\u0001\u0012B\u001d\u0012\u0016\b\u0002\u0010\u0003\u001a\u0010\u0012\n\u0012\b\u0012\u0004\u0012\u00028\u00000\u0000\u0018\u00010\u0004¢\u0006\u0002\u0010\u0005J\u0014\u0010\u0006\u001a\u00020\u00072\f\u0010\b\u001a\b\u0012\u0004\u0012\u00028\u00000\u0000J\u0014\u0010\t\u001a\u0010\u0012\n\u0012\b\u0012\u0004\u0012\u00028\u00000\u0000\u0018\u00010\nJ\u0006\u0010\u000b\u001a\u00020\fJ\u001d\u0010\r\u001a\u00020\u00072\u0006\u0010\u000e\u001a\u00020\u000f2\u0006\u0010\u0010\u001a\u00028\u0000H\u0016¢\u0006\u0002\u0010\u0011R\u001c\u0010\u0003\u001a\u0010\u0012\n\u0012\b\u0012\u0004\u0012\u00028\u00000\u0000\u0018\u00010\u0004X\u0082\u000e¢\u0006\u0002\n\u0000¨\u0006\u0013"}, d2 = {"Lcom/discord/simpleast/core/node/Node;", "R", "", "children", "", "(Ljava/util/Collection;)V", "addChild", "", "child", "getChildren", "", "hasChildren", "", "render", "builder", "Landroid/text/SpannableStringBuilder;", "renderContext", "(Landroid/text/SpannableStringBuilder;Ljava/lang/Object;)V", "Parent", "simpleast-core_release"}, k = 1, mv = {1, 4, 0})
+public class Node<R> {
+    private Collection<Node<R>> children;
+
+    @Metadata(bv = {1, 0, 3}, d1 = {"\u0000(\n\u0002\u0018\u0002\n\u0000\n\u0002\u0018\u0002\n\u0000\n\u0002\u0010\u0011\n\u0002\b\u0002\n\u0002\u0010\u0002\n\u0000\n\u0002\u0018\u0002\n\u0002\b\u0003\n\u0002\u0010\u000e\n\u0000\b\u0016\u0018\u0000*\u0004\b\u0001\u0010\u00012\b\u0012\u0004\u0012\u0002H\u00010\u0002B)\u0012\"\u0010\u0003\u001a\u0012\u0012\u000e\b\u0001\u0012\n\u0012\u0004\u0012\u00028\u0001\u0018\u00010\u00020\u0004\"\n\u0012\u0004\u0012\u00028\u0001\u0018\u00010\u0002¢\u0006\u0002\u0010\u0005J\u001d\u0010\u0006\u001a\u00020\u00072\u0006\u0010\b\u001a\u00020\t2\u0006\u0010\n\u001a\u00028\u0001H\u0016¢\u0006\u0002\u0010\u000bJ\b\u0010\f\u001a\u00020\rH\u0016¨\u0006\u000e"}, d2 = {"Lcom/discord/simpleast/core/node/Node$Parent;", "R", "Lcom/discord/simpleast/core/node/Node;", "children", "", "([Lcom/discord/simpleast/core/node/Node;)V", "render", "", "builder", "Landroid/text/SpannableStringBuilder;", "renderContext", "(Landroid/text/SpannableStringBuilder;Ljava/lang/Object;)V", "toString", "", "simpleast-core_release"}, k = 1, mv = {1, 4, 0})
+    public static class Parent<R> extends Node<R> {
+        public Parent(@NotNull Node<R>... children) {
+            Intrinsics.checkNotNullParameter(children, "children");
+            ArrayList arrayList = new ArrayList();
+            for (Node<R> node : children) {
+                if (node != null) {
+                    arrayList.add(node);
+                }
+            }
+            super(CollectionsKt.j0(arrayList));
+        }
+
+        @Override // com.discord.simpleast.core.node.Node
+        public void render(@NotNull SpannableStringBuilder builder, R renderContext) {
+            Intrinsics.checkNotNullParameter(builder, "builder");
+            Collection<Node<R>> children = getChildren();
+            if (children != null) {
+                Iterator<T> it = children.iterator();
+                while (it.hasNext()) {
+                    ((Node) it.next()).render(builder, renderContext);
+                }
+            }
+        }
+
+        @NotNull
+        public String toString() {
+            StringBuilder sb2 = new StringBuilder();
+            sb2.append(getClass().getSimpleName());
+            sb2.append(" >\n");
+            Collection<Node<R>> children = getChildren();
+            sb2.append(children != null ? CollectionsKt.O(children, "\n->", ">>", "\n>|", new Function1<Node<R>, CharSequence>() { // from class: com.discord.simpleast.core.node.Node$Parent$toString$1
+                @Override // kotlin.jvm.functions.Function1
+                @NotNull
+                public final CharSequence invoke(@NotNull Node<R> it) {
+                    Intrinsics.checkNotNullParameter(it, "it");
+                    return it.toString();
+                }
+            }, 24) : null);
+            return sb2.toString();
+        }
+    }
+
+    /* JADX WARN: Multi-variable type inference failed */
+    public Node() {
+        this(null, 1, 0 == true ? 1 : 0);
+    }
+
+    public final void addChild(@NotNull Node<R> child) {
+        Intrinsics.checkNotNullParameter(child, "child");
+        Collection<Node<R>> arrayList = this.children;
+        if (arrayList == null) {
+            arrayList = new ArrayList<>();
+        }
+        arrayList.add(child);
+        Unit unit = Unit.f14616a;
+        this.children = arrayList;
+    }
+
+    public final Collection<Node<R>> getChildren() {
+        return this.children;
+    }
+
+    public final boolean hasChildren() {
+        Collection<Node<R>> collection = this.children;
+        return collection != null && (collection.isEmpty() ^ true);
+    }
+
+    public void render(@NotNull SpannableStringBuilder builder, R renderContext) {
+        Intrinsics.checkNotNullParameter(builder, "builder");
+    }
+
+    public Node(Collection<Node<R>> collection) {
+        this.children = collection;
+    }
+
+    public /* synthetic */ Node(Collection collection, int i7, DefaultConstructorMarker defaultConstructorMarker) {
+        this((i7 & 1) != 0 ? null : collection);
+    }
+}

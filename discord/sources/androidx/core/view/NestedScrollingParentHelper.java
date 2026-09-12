@@ -1,0 +1,11 @@
+package androidx.core.view;
+
+/* JADX INFO: loaded from: classes.dex */
+public final class NestedScrollingParentHelper {
+
+    /* JADX INFO: renamed from: a, reason: collision with root package name */
+    public int f1601a;
+
+    /* JADX INFO: renamed from: b, reason: collision with root package name */
+    public int f1602b;
+}

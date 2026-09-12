@@ -1,0 +1,21 @@
+package com.discord.react_asset_fetcher;
+
+import com.swmansion.rnscreens.Screen;
+import java.util.Map;
+import kotlin.Metadata;
+import kotlin.Pair;
+import kotlin.collections.w0;
+import org.jetbrains.annotations.NotNull;
+
+/* JADX INFO: loaded from: classes.dex */
+@Metadata(d1 = {"\u0000\u0012\n\u0000\n\u0002\u0010$\n\u0002\u0018\u0002\n\u0002\u0010\u000e\n\u0002\b\u0003\" \u0010\u0000\u001a\u000e\u0012\u0004\u0012\u00020\u0002\u0012\u0004\u0012\u00020\u00030\u0001X\u0080\u0004¢\u0006\b\n\u0000\u001a\u0004\b\u0004\u0010\u0005¨\u0006\u0006"}, d2 = {"ReactAssetOldNames", "", "Lcom/discord/react_asset_fetcher/ReactAsset;", "", "getReactAssetOldNames", "()Ljava/util/Map;", "react_asset_fetcher_release"}, k = 2, mv = {2, 1, 0}, xi = 48)
+public final class ReactAssetOldNamesKt {
+
+    @NotNull
+    private static final Map<ReactAsset, String> ReactAssetOldNames = w0.g(new Pair(ReactAsset.AnnouncementsIcon, "AnnouncementThread"), new Pair(ReactAsset.ArrowAngleLeftUpIcon, "Reply"), new Pair(ReactAsset.ArrowLargeLeftIcon, "ArrowBack"), new Pair(ReactAsset.ArrowLargeRightIcon, "ArrowForward"), new Pair(ReactAsset.AttachmentIcon, "Attachment"), new Pair(ReactAsset.BellZIcon, "BellSnooze"), new Pair(ReactAsset.BoostGemIcon, "MemberListBadge"), new Pair(ReactAsset.ChannelListMagnifyingGlassIcon, "ChannelBrowse"), new Pair(ReactAsset.CheckmarkLargeIcon, "Checkmark"), new Pair(ReactAsset.CheckmarkSmallIcon, "Check"), new Pair(ReactAsset.ChevronSmallDownIcon, "JumpToBottom"), new Pair(ReactAsset.ChevronSmallRightIcon, "ArrowRight"), new Pair(ReactAsset.CircleErrorIcon, "Alert"), new Pair(ReactAsset.CircleInformationIcon, "Info"), new Pair(ReactAsset.CircleQuestionIcon, "Help"), new Pair(ReactAsset.ClipsIcon, "Clip"), new Pair(ReactAsset.ClockWarningIcon, "ClockTimeout"), new Pair(ReactAsset.ConnectionAverageIcon, "CallStatusYellow"), new Pair(ReactAsset.ConnectionBadIcon, "CallStatusRed"), new Pair(ReactAsset.ConnectionFineIcon, "CallStatusGreen"), new Pair(ReactAsset.ConnectionUnknownIcon, "CallStatusUnknown"), new Pair(ReactAsset.DownloadIcon, "Download"), new Pair(ReactAsset.EyeIcon, "ShowMedia"), new Pair(ReactAsset.EyeSlashIcon, "HideMedia"), new Pair(ReactAsset.GameControllerIcon, "GameController"), new Pair(ReactAsset.GifIcon, "Gif"), new Pair(ReactAsset.GroupIcon, "Members"), new Pair(ReactAsset.HandRequestSpeakIcon, "RaisedHand"), new Pair(ReactAsset.HomeIcon, "Home"), new Pair(ReactAsset.ImageBrokenIcon, "BrokenImage"), new Pair(ReactAsset.ImageWarningIcon, "MediaChannelNSFW"), new Pair(ReactAsset.LinkIcon, "Link"), new Pair(ReactAsset.LockIcon, "LockClosed"), new Pair(ReactAsset.LockUnlockedIcon, "LockOpen"), new Pair(ReactAsset.MicrophoneArrowRightIcon, "MoveToSpeaker"), new Pair(ReactAsset.MicrophoneIcon, "Mic"), new Pair(ReactAsset.MicrophoneSlashIcon, "MicMutedDark"), new Pair(ReactAsset.MoreHorizontalIcon, "More"), new Pair(ReactAsset.MusicIcon, "Music"), new Pair(ReactAsset.PaperIcon, "File"), new Pair(ReactAsset.PauseIcon, "Pause"), new Pair(ReactAsset.PencilIcon, "Pencil"), new Pair(ReactAsset.PhoneCallIcon, "CallConnect"), new Pair(ReactAsset.PhoneHangUpIcon, "CallDisconnect"), new Pair(ReactAsset.PinIcon, "Pin"), new Pair(ReactAsset.PlayIcon, "Play"), new Pair(ReactAsset.PlaystationNeutralIcon, "PlaystationNeutral"), new Pair(ReactAsset.ReactionIcon, "AddReaction"), new Pair(ReactAsset.RefreshIcon, "Refresh"), new Pair(ReactAsset.RoleSubscriptionPurchaseCard, "RoleSubscriptionPurchaseCardBg"), new Pair(ReactAsset.ScreenIcon, Screen.TAG), new Pair(ReactAsset.SlashBoxIcon, "SlashBox"), new Pair(ReactAsset.SpotifyNeutralIcon, "SpotifyBrandNeutral"), new Pair(ReactAsset.StageIcon, "StageChannel"), new Pair(ReactAsset.StickerIcon, "Sticker"), new Pair(ReactAsset.SuperReactionIcon, "AddBurstReaction"), new Pair(ReactAsset.ThreadIcon, "Thread"), new Pair(ReactAsset.TicketIcon, "Ticket"), new Pair(ReactAsset.TopicsIcon, "Summary"), new Pair(ReactAsset.VoiceNormalIcon, "Speaker"), new Pair(ReactAsset.VoiceXIcon, "VolumeMute"), new Pair(ReactAsset.WarningIcon, "WarningTriangle"), new Pair(ReactAsset.WindowLaunchIcon, "Launch"), new Pair(ReactAsset.XSmallIcon, "Cancel"), new Pair(ReactAsset.XboxNeutralIcon, "XboxNeutral"));
+
+    @NotNull
+    public static final Map<ReactAsset, String> getReactAssetOldNames() {
+        return ReactAssetOldNames;
+    }
+}

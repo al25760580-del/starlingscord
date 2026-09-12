@@ -1,0 +1,13 @@
+package md;
+
+import android.os.Handler;
+
+/* JADX INFO: loaded from: classes3.dex */
+public final class v {
+
+    /* JADX INFO: renamed from: a, reason: collision with root package name */
+    public Handler f15714a;
+
+    /* JADX INFO: renamed from: b, reason: collision with root package name */
+    public Object f15715b;
+}
