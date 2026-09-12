@@ -348,14 +348,15 @@ object DiscordGateway {
                             "$appliedPresences presences, " +
                             "${guild.roles?.size ?: 0} roles, ${guild.emojis?.size ?: 0} emojis",
                     )
-                    // Subscribe to the guild's member list (lazy request, op
-                    // 14) so the server starts sending GUILD_MEMBER_LIST_UPDATE
-                    // events (members + presences + typing) for the first
-                    // 100 slots. Without this, user accounts get almost no
-                    // PRESENCE_UPDATE events and no bulk member data.
+                    // Subscribe to the guild (typing + activities + presence
+                    // stream + the first 100 member-list slots). The current
+                    // protocol uses opcode 37 GUILD_SUBSCRIPTIONS_BULK (what
+                    // the official client sends); the old op 14 "lazy request"
+                    // no longer decodes server-side and gets the connection
+                    // closed with 4002.
                     guild.channels
                         ?.firstOrNull { DiscordMappings.isListableChannel(it.type) }
-                        ?.id?.let { firstChannelId -> sendLazyRequest(gid, firstChannelId) }
+                        ?.id?.let { firstChannelId -> sendGuildSubscription(gid, firstChannelId) }
                 }
             }
 
@@ -676,21 +677,23 @@ object DiscordGateway {
     }
 
     /**
-     * Opcode 14 "Lazy Request" (undocumented; see the unofficial docs):
-     * subscribes to the guild's member list ranges so the server sends
-     * GUILD_MEMBER_LIST_UPDATE events with members + presences, and starts
-     * streaming PRESENCE_UPDATE for that guild. The official client always
-     * requests [0, 99] up front.
+     * Opcode 37 GUILD_SUBSCRIPTIONS_BULK: subscribes to a guild's presence
+     * stream (typing/activities/threads) and, via the channels map, to member
+     * list ranges - the server then sends GUILD_MEMBER_LIST_UPDATE events
+     * with members + presences, and PRESENCE_UPDATEs for that guild. This is
+     * the only form the official client still uses (the legacy op 14 "lazy
+     * request" is gone and gets the connection killed with close code 4002).
      */
-    private suspend fun WebSocketSession.sendLazyRequest(guildId: String, channelId: String) {
-        val payload = buildJsonObject {
-            put("op", 14)
-            putJsonObject("d") {
-                put("guild_id", guildId)
-                put("typing", true)
-                put("threads", false)
-                put("activities", true)
-                putJsonArray("members") {}
+    private suspend fun WebSocketSession.sendGuildSubscription(
+        guildId: String,
+        channelId: String?,
+    ) {
+        val subscription = buildJsonObject {
+            put("typing", true)
+            put("threads", true)
+            put("activities", true)
+            put("member_updates", false)
+            if (channelId != null) {
                 putJsonObject("channels") {
                     putJsonArray(channelId) {
                         add(buildJsonArray {
@@ -701,11 +704,22 @@ object DiscordGateway {
                 }
             }
         }
+        val payload = buildJsonObject {
+            put("op", 37)
+            putJsonObject("d") {
+                putJsonObject("subscriptions") {
+                    put(guildId, subscription)
+                }
+            }
+        }
         try {
             send(DiscordJson.encodeToString(JsonObject.serializer(), payload))
-            Log.i("StoatPresence", "Sent lazy request for guild $guildId (channel $channelId)")
+            Log.i(
+                "StoatPresence",
+                "Sent guild subscription (op 37) for $guildId (member list via $channelId)",
+            )
         } catch (e: Exception) {
-            Log.e("StoatPresence", "Failed to send lazy request for $guildId", e)
+            Log.e("StoatPresence", "Failed to send guild subscription for $guildId", e)
         }
     }
 
