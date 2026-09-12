@@ -1,7 +1,36 @@
 package chat.stoat.core.discord.models
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+
+/**
+ * Decodes a field that Discord sends as EITHER a JSON string or a JSON number
+ * (e.g. message nonces: this client sends <=25-char strings, others send
+ * integers) into the model's String? convention.
+ */
+object LenientStringSerializer : KSerializer<String?> {
+    override val descriptor =
+        PrimitiveSerialDescriptor("LenientString", PrimitiveKind.STRING)
+
+    override fun serialize(encoder: Encoder, value: String?) =
+        if (value == null) encoder.encodeNull() else encoder.encodeString(value)
+
+    override fun deserialize(decoder: Decoder): String? {
+        return when (val element = decoder.decodeSerializableValue(JsonElement.serializer())) {
+            is JsonNull -> null
+            is JsonPrimitive -> element.content
+            else -> null
+        }
+    }
+}
 
 @Serializable
 data class DiscordMessage(
@@ -11,7 +40,9 @@ data class DiscordMessage(
     val author: DiscordUser? = null,
     // Client-generated id echoed back on the REST response AND the gateway
     // MESSAGE_CREATE - lets the UI swap its optimistic "pending" bubble for
-    // the real message no matter which arrives first.
+    // the real message no matter which arrives first. Discord allows integer
+    // nonces too (other clients send them), so decode tolerates both shapes.
+    @Serializable(with = LenientStringSerializer::class)
     val nonce: String? = null,
     @SerialName("webhook_id")
     val webhookId: String? = null,

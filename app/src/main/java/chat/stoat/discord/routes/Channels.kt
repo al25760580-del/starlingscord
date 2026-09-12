@@ -204,8 +204,16 @@ suspend fun HttpClient.sendMessage(
                 )
             )
         }
-        DiscordJson.decodeFromString(DiscordMessage.serializer(), response.bodyAsText())
+        // A 4xx body (e.g. 50035 NONCE_TYPE_TOO_LONG) is NOT a message: decode
+        // would silently produce a null-id husk. Surface the real error.
+        val body = response.bodyAsText()
+        if (!response.status.isSuccess()) {
+            Log.e("DiscordSend", "POST message failed: HTTP ${response.status.value} $body")
+            return null
+        }
+        DiscordJson.decodeFromString(DiscordMessage.serializer(), body)
     } catch (e: Exception) {
+        Log.e("DiscordSend", "POST message crashed", e)
         null
     }
 }
