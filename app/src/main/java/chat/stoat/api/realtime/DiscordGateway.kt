@@ -224,7 +224,7 @@ object DiscordGateway {
     private suspend fun WebSocketSession.handleDispatch(payload: GatewayPayload) {
         // Trace every dispatch so any gap between "event received" and
         // "frame emitted" is visible in logcat.
-        Log.d("DiscordGateway", "Dispatch ${'$'}{payload.t} (s=${'$'}{payload.s})")
+        Log.d("DiscordGateway", "Dispatch ${payload.t} (s=${payload.s})")
         when (payload.t) {
             "READY" -> {
                 val ready = DiscordJson.decodeFromJsonElement(
@@ -294,13 +294,34 @@ object DiscordGateway {
                         e.id?.let { eid -> DiscordAPI.emojiCache[eid] = e.copy(guildId = gid) }
                     }
                     // Member presences (online/idle/dnd/offline); PRESENCE_UPDATE
-                    // keeps them current afterwards.
-                    guild.presences?.forEach { p -> applyPresence(p, "GUILD_CREATE") }
+                    // keeps them current afterwards. Parsed element-by-element
+                    // from the raw payload so a bad/unexpected presence shape
+                    // can never fail the GUILD_CREATE decode (which caches
+                    // roles, members, emojis and channels).
+                    var appliedPresences = 0
+                    (payload.d as? JsonObject)?.get("presences")?.let { presencesEl ->
+                        if (presencesEl is JsonArray) {
+                            presencesEl.forEach { el ->
+                                val presence = runCatching {
+                                    DiscordJson.decodeFromJsonElement(
+                                        DiscordPresence.serializer(),
+                                        el,
+                                    )
+                                }.onFailure {
+                                    Log.w("StoatPresence", "bad presence entry: ${it.message}")
+                                }.getOrNull()
+                                if (presence != null) {
+                                    applyPresence(presence, "GUILD_CREATE")
+                                    appliedPresences++
+                                }
+                            }
+                        }
+                    }
                     Log.i(
                         "DiscordGateway",
-                        "GUILD_CREATE ${'$'}gid: ${'$'}{guild.members?.size ?: 0} members, " +
-                            "${'$'}{guild.presences?.size ?: 0} presences, " +
-                            "${'$'}{guild.roles?.size ?: 0} roles, ${'$'}{guild.emojis?.size ?: 0} emojis",
+                        "GUILD_CREATE $gid: ${guild.members?.size ?: 0} members, " +
+                            "$appliedPresences presences, " +
+                            "${guild.roles?.size ?: 0} roles, ${guild.emojis?.size ?: 0} emojis",
                     )
                 }
             }
@@ -369,7 +390,7 @@ object DiscordGateway {
                     } else {
                         Log.d(
                             "StoatRoles",
-                            "MESSAGE_CREATE member without resolvable guild (channel=${'$'}{message.channelId})",
+                            "MESSAGE_CREATE member without resolvable guild (channel=${message.channelId})",
                         )
                     }
                 }
@@ -377,8 +398,8 @@ object DiscordGateway {
                 val emitted = StoatAPI.wsFrameChannel.tryEmit(adapted)
                 Log.d(
                     "DiscordGateway",
-                    "MESSAGE_CREATE id=${'$'}{message.id} channel=${'$'}{message.channelId} " +
-                        "author=${'$'}{message.author?.id} ulid=${'$'}{adapted.id} emitted=${'$'}emitted",
+                    "MESSAGE_CREATE id=${message.id} channel=${message.channelId} " +
+                        "author=${message.author?.id} ulid=${adapted.id} emitted=$emitted",
                 )
             }
 
@@ -421,7 +442,7 @@ object DiscordGateway {
                 )
                 Log.i(
                     "DiscordGateway",
-                    "MESSAGE_DELETE id=${'$'}snowflake channel=${'$'}channelId ulid=${'$'}messageUlid emitted=${'$'}emitted",
+                    "MESSAGE_DELETE id=$snowflake channel=$channelId ulid=$messageUlid emitted=$emitted",
                 )
             }
 
@@ -436,7 +457,7 @@ object DiscordGateway {
                 val emitted = StoatAPI.wsFrameChannel.tryEmit(
                     ChannelStartTypingFrame(id = channelId, user = userId)
                 )
-                Log.d("StoatTyping", "user=${'$'}userId channel=${'$'}channelId emitted=${'$'}emitted")
+                Log.d("StoatTyping", "user=$userId channel=$channelId emitted=$emitted")
             }
 
             "MESSAGE_REACTION_ADD", "MESSAGE_REACTION_REMOVE", "MESSAGE_REACTION_REMOVE_ALL" -> {
@@ -449,24 +470,26 @@ object DiscordGateway {
                 val messageUlid = DiscordMappings.snowflakeToUlid(messageSf)
                     ?: DiscordMappings.ulidForRequest(messageSf)
                     ?: run {
-                        Log.w("StoatReact", "${'$'}{payload.t}: no ULID for message ${'$'}messageSf")
+                        Log.w("StoatReact", "${payload.t}: no ULID for message $messageSf")
                         return@handleDispatch
                     }
                 val emoji = data.emoji ?: return@handleDispatch
                 val key = emoji.id ?: emoji.name ?: run {
-                    Log.w("StoatReact", "${'$'}{payload.t}: emoji without id/name")
+                    Log.w("StoatReact", "${payload.t}: emoji without id/name")
                     return@handleDispatch
                 }
                 // Register the emoji so chips and the react routes resolve
                 // name:id + the CDN asset even for foreign-server emojis.
                 val eid = emoji.id
                 if (eid != null && emoji.name != null && eid !in DiscordAPI.emojiCache) {
-                    val gid = StoatAPI.channelCache[channelId]?.server
+                    // guildId=null: the emoji may belong to a foreign server;
+                    // null keeps it out of the picker's server sections while
+                    // chips/sheets still render it from the Discord CDN.
                     DiscordAPI.emojiCache[eid] = DiscordGuildEmoji(
                         id = eid,
                         name = emoji.name,
                         animated = emoji.animated,
-                        guildId = gid,
+                        guildId = null,
                     )
                 }
                 val add = payload.t == "MESSAGE_REACTION_ADD"
@@ -490,8 +513,8 @@ object DiscordGateway {
                 val emitted = StoatAPI.wsFrameChannel.tryEmit(frame)
                 Log.i(
                     "StoatReact",
-                    "${'$'}{payload.t} msg=${'$'}messageUlid emoji=${'$'}key user=${'$'}{data.userId} " +
-                        "cached=${'$'}{updated != null} emitted=${'$'}emitted",
+                    "${payload.t} msg=$messageUlid emoji=$key user=${data.userId} " +
+                        "cached=${updated != null} emitted=$emitted",
                 )
             }
 
@@ -504,7 +527,7 @@ object DiscordGateway {
             }
 
             "CHANNEL_PINS_UPDATE" -> {
-                Log.i("StoatPins", "CHANNEL_PINS_UPDATE ${'$'}{payload.d}")
+                Log.i("StoatPins", "CHANNEL_PINS_UPDATE ${payload.d}")
             }
 
             "RESUMED" -> {
@@ -540,7 +563,7 @@ object DiscordGateway {
         )
         Log.i(
             "StoatPresence",
-            "[${'$'}source] user=${'$'}uid discord=${'$'}{p.status} -> ${'$'}mapped (online=${'$'}online)",
+            "[$source] user=$uid discord=${p.status} -> $mapped (online=$online)",
         )
     }
 
@@ -559,7 +582,7 @@ object DiscordGateway {
     ): Message? {
         val msg = StoatAPI.messageCache[messageUlid]
             ?: run {
-                Log.d("StoatReact", "reaction event for uncached message ${'$'}messageUlid")
+                Log.d("StoatReact", "reaction event for uncached message $messageUlid")
                 return null
             }
         val map = msg.reactions?.toMutableMap() ?: mutableMapOf()

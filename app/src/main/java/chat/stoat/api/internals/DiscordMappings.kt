@@ -470,7 +470,6 @@ object DiscordMappings {
         m: DiscordMessage,
         reactions: List<DiscordReaction>,
     ): Map<String, List<String>> {
-        val gid = m.channelId?.let { StoatAPI.channelCache[it]?.server }
         val selfId = StoatAPI.selfId
         val map = mutableMapOf<String, List<String>>()
         reactions.forEach { r ->
@@ -480,11 +479,13 @@ object DiscordMappings {
             // load the CDN asset and the react routes can build name:id.
             val eid = emoji.id
             if (eid != null && emoji.name != null && eid !in DiscordAPI.emojiCache) {
+                // guildId=null: reaction emojis may come from foreign servers;
+                // they must render (CDN) but not pollute the picker's sections.
                 DiscordAPI.emojiCache[eid] = DiscordGuildEmoji(
                     id = eid,
                     name = emoji.name,
                     animated = emoji.animated,
-                    guildId = gid,
+                    guildId = null,
                 )
             }
             // The app model counts a reaction as the size of its reactor id
@@ -492,13 +493,13 @@ object DiscordMappings {
             val list = mutableListOf<String>()
             if (r.me && selfId != null) list.add(selfId)
             while (list.size < r.count) {
-                list.add("$REACTION_GHOST_PREFIX${'$'}key-${'$'}{list.size}")
+                list.add("$REACTION_GHOST_PREFIX$key-${list.size}")
             }
             map[key] = list
             Log.d(
                 "StoatReact",
-                "reaction emoji=${'$'}key count=${'$'}{r.count} me=${'$'}{r.me} " +
-                    "ghosts=${'$'}{list.size - if (r.me && selfId != null) 1 else 0}",
+                "reaction emoji=$key count=${r.count} me=${r.me} " +
+                    "ghosts=${list.size - if (r.me && selfId != null) 1 else 0}",
             )
         }
         return map

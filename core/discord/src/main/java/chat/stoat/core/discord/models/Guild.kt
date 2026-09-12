@@ -39,8 +39,10 @@ data class DiscordGuild(
     /** Present on the full guild object (GUILD_CREATE, GET /guilds/{id}). */
     val emojis: List<DiscordGuildEmoji>? = null,
 
-    /** Member presences shipped with GUILD_CREATE for user accounts. */
-    val presences: List<DiscordPresence>? = null,
+    // NOTE: GUILD_CREATE presences are intentionally NOT modelled here: a
+    // mismatch with the real payload shape would make the whole
+    // DiscordGuild decode fail, dropping roles/emojis/members/channels.
+    // The gateway parses them element-by-element from the raw JSON instead.
 
     /** Total permissions for the requesting user, excluding channel overwrites. */
     val permissions: String? = null,

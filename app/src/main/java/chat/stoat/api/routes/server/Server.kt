@@ -1,5 +1,6 @@
 package chat.stoat.api.routes.server
 
+import android.util.Log
 import chat.stoat.api.StoatAPI
 import chat.stoat.api.internals.DiscordMappings
 import chat.stoat.core.model.schemas.Member
@@ -18,6 +19,7 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import io.ktor.http.isSuccess
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 
@@ -37,38 +39,61 @@ suspend fun fetchMembers(
     includeOffline: Boolean = false,
     pure: Boolean = false
 ): FetchMembersResponse {
-    val response = DiscordHttp.get("$DISCORD_API/guilds/$serverId/members") {
-        parameter("limit", 1000)
-    }.bodyAsText()
+    // A failed member fetch (HTTP error such as 50001 Missing Access, or an
+    // unexpected body) must return empty lists, never crash the caller.
+    return try {
+        val http = DiscordHttp.get("$DISCORD_API/guilds/$serverId/members") {
+            parameter("limit", 1000)
+        }
+        if (!http.status.isSuccess()) {
+            Log.w(
+                "StoatMembers",
+                "fetchMembers($serverId) failed: HTTP ${http.status.value} — " +
+                    http.bodyAsText().take(200),
+            )
+            return FetchMembersResponse(members = emptyList(), users = emptyList())
+        }
 
-    val discordMembers = DiscordJson.decodeFromString(
-        ListSerializer(DiscordMember.serializer()),
-        response,
-    )
+        val discordMembers = DiscordJson.decodeFromString(
+            ListSerializer(DiscordMember.serializer()),
+            http.bodyAsText(),
+        )
 
-    val members = discordMembers.mapNotNull { DiscordMappings.adaptMember(serverId, it) }
-    val users = discordMembers.mapNotNull { it.user }.mapNotNull { DiscordMappings.adaptUser(it) }
+        val members = discordMembers.mapNotNull { DiscordMappings.adaptMember(serverId, it) }
+        val users = discordMembers.mapNotNull { it.user }.mapNotNull { DiscordMappings.adaptUser(it) }
 
-    if (!pure) {
-        members.forEach { member ->
-            member.id?.let { choice ->
-                if (!StoatAPI.members.hasMember(serverId, choice.user)) {
-                    StoatAPI.members.setMember(serverId, member)
+        if (!pure) {
+            members.forEach { member ->
+                member.id?.let { choice ->
+                    if (!StoatAPI.members.hasMember(serverId, choice.user)) {
+                        StoatAPI.members.setMember(serverId, member)
+                    }
                 }
             }
+            users.forEach { user ->
+                user.id?.let { StoatAPI.userCache.putIfAbsent(it, user) }
+            }
         }
-        users.forEach { user ->
-            user.id?.let { StoatAPI.userCache.putIfAbsent(it, user) }
-        }
-    }
 
-    return FetchMembersResponse(members = members, users = users)
+        Log.i("StoatMembers", "fetchMembers($serverId): ${members.size} members")
+        FetchMembersResponse(members = members, users = users)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.e("StoatMembers", "fetchMembers($serverId) failed", e)
+        FetchMembersResponse(members = emptyList(), users = emptyList())
+    }
 }
 
 /** Fetches one guild member: `GET /guilds/{id}/members/{uid}`. */
 suspend fun fetchMember(serverId: String, userId: String, pure: Boolean = false): Member {
     val response = DiscordHttp.get("$DISCORD_API/guilds/$serverId/members/$userId").bodyAsText()
-    val discordMember = DiscordJson.decodeFromString(DiscordMember.serializer(), response)
+    val discordMember = try {
+        DiscordJson.decodeFromString(DiscordMember.serializer(), response)
+    } catch (e: Exception) {
+        Log.w("StoatMembers", "fetchMember($serverId/$userId) failed: ${e.message}")
+        throw Exception("Member not found")
+    }
     val member = DiscordMappings.adaptMember(serverId, discordMember)
         ?: throw Exception("Member not found")
 
