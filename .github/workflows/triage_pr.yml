@@ -6,6 +6,10 @@ on:
 
 jobs:
   track_pr:
+    # Disabled: inherited from the Revolt upstream. It adds PRs to a `revoltchat`
+    # organization board using a `secrets.PAT` secret that does not exist in this
+    # repository, so the job fails with exit code 4 on every PR.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     steps:
       - name: Get project data
