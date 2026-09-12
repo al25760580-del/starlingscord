@@ -48,6 +48,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -880,8 +881,23 @@ object DiscordGateway {
     }
 
     private suspend fun WebSocketSession.sendHeartbeat() {
-        val payload = GatewayPayload(op = 1, d = lastSeq?.let { JsonPrimitive(it) })
-        send(DiscordJson.encodeToString(GatewayPayload.serializer(), payload))
+        // The gateway REQUIRES the "d" field on every heartbeat: null before
+        // the first dispatch event, the last sequence number afterwards.
+        // kotlinx's explicitNulls=false makes a null/default property get
+        // OMITTED entirely, so the first heartbeat went out as {"op":1} and
+        // the server killed the connection with close code 4002 "Error while
+        // decoding payload" - right after HELLO, before READY, which is why
+        // no live events ever arrived (and why the op 14 -> op 37 change
+        // did not fix the banner: the subscription was never even sent).
+        // JsonNull is a non-null JsonElement, so "d":null is serialized
+        // explicitly. Verified against the live gateway: {"op":1} -> 4002,
+        // {"op":1,"d":null} -> heartbeat ACK.
+        val json = DiscordJson.encodeToString(
+            GatewayPayload.serializer(),
+            GatewayPayload(op = 1, d = lastSeq?.let { JsonPrimitive(it) } ?: JsonNull),
+        )
+        Log.d("DiscordGateway", "Heartbeat frame: $json")
+        send(json)
     }
 
     /**
