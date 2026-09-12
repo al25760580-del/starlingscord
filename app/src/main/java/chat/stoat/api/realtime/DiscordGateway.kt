@@ -13,6 +13,7 @@ import chat.stoat.core.discord.models.ClientState
 import chat.stoat.core.discord.models.DiscordChannel
 import chat.stoat.core.discord.models.DiscordGuild
 import chat.stoat.core.discord.models.DiscordGuildEmoji
+import chat.stoat.core.discord.models.DiscordMember
 import chat.stoat.core.discord.models.DiscordMessage
 import chat.stoat.core.discord.models.DiscordPresence
 import chat.stoat.core.discord.models.DiscordPresenceUser
@@ -32,6 +33,7 @@ import chat.stoat.discord.DiscordAPI
 import chat.stoat.discord.DiscordHttp
 import chat.stoat.discord.DiscordJson
 import chat.stoat.discord.routes.fetchSelfStatus
+import chat.stoat.discord.routes.patchSelfSettings
 import io.ktor.client.plugins.websocket.ws
 import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
@@ -52,7 +54,9 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
 /**
@@ -323,6 +327,14 @@ object DiscordGateway {
                             "$appliedPresences presences, " +
                             "${guild.roles?.size ?: 0} roles, ${guild.emojis?.size ?: 0} emojis",
                     )
+                    // Subscribe to the guild's member list (lazy request, op
+                    // 14) so the server starts sending GUILD_MEMBER_LIST_UPDATE
+                    // events (members + presences + typing) for the first
+                    // 100 slots. Without this, user accounts get almost no
+                    // PRESENCE_UPDATE events and no bulk member data.
+                    guild.channels
+                        ?.firstOrNull { DiscordMappings.isListableChannel(it.type) }
+                        ?.id?.let { firstChannelId -> sendLazyRequest(gid, firstChannelId) }
                 }
             }
 
@@ -530,6 +542,103 @@ object DiscordGateway {
                 Log.i("StoatPins", "CHANNEL_PINS_UPDATE ${payload.d}")
             }
 
+            "GUILD_MEMBER_LIST_UPDATE" -> {
+                // Response to op 14: the live member list. SYNC carries
+                // {member, presence} pairs in bulk - exactly what role
+                // colours and status dots need. Parsed item-by-item so one
+                // bad entry can never fail the event.
+                val d = payload.d as? JsonObject ?: return@handleDispatch
+                val gid = (d["guild_id"] as? JsonPrimitive)?.content ?: return@handleDispatch
+                var members = 0
+                var presences = 0
+                (d["ops"] as? JsonArray)?.forEach { opEl ->
+                    val op = opEl as? JsonObject ?: return@forEach
+                    val items = (op["items"] as? JsonArray)
+                        ?: listOfNotNull(op["item"]).let { it }
+                    items.forEach { itemEl ->
+                        val memberWrapper = (itemEl as? JsonObject)?.get("member")
+                            as? JsonObject ?: return@forEach
+                        runCatching {
+                            (memberWrapper["member"] as? JsonObject)?.let { memberJson ->
+                                val member = DiscordJson.decodeFromJsonElement(
+                                    DiscordMember.serializer(),
+                                    memberJson,
+                                )
+                                DiscordMappings.cacheMemberUser(member)
+                                DiscordMappings.adaptMember(gid, member)?.let { adapted ->
+                                    if (adapted.id != null) {
+                                        StoatAPI.members.setMember(gid, adapted)
+                                        members++
+                                    }
+                                }
+                                if (member.user?.id == DiscordAPI.selfId) {
+                                    DiscordAPI.selfMembers[gid] = member
+                                }
+                            }
+                            (memberWrapper["presence"] as? JsonObject)?.let { presenceJson ->
+                                val presence = DiscordJson.decodeFromJsonElement(
+                                    DiscordPresence.serializer(),
+                                    presenceJson,
+                                )
+                                applyPresence(presence, "MEMBER_LIST")
+                                presences++
+                            }
+                        }.onFailure {
+                            Log.w("StoatPresence", "bad member-list entry: ${it.message}")
+                        }
+                    }
+                }
+                Log.i(
+                    "StoatPresence",
+                    "GUILD_MEMBER_LIST_UPDATE $gid: +$members members, +$presences presences " +
+                        "(count=${(d["member_count"] as? JsonPrimitive)?.content})",
+                )
+            }
+
+            "GUILD_MEMBERS_CHUNK" -> {
+                // Response to op 8 (member search); also carries presences
+                // when requested. Cache defensively, entry by entry.
+                val d = payload.d as? JsonObject ?: return@handleDispatch
+                val gid = (d["guild_id"] as? JsonPrimitive)?.content ?: return@handleDispatch
+                var members = 0
+                var presences = 0
+                (d["members"] as? JsonArray)?.forEach { el ->
+                    runCatching {
+                        val member = DiscordJson.decodeFromJsonElement(
+                            DiscordMember.serializer(),
+                            el,
+                        )
+                        DiscordMappings.cacheMemberUser(member)
+                        DiscordMappings.adaptMember(gid, member)?.let { adapted ->
+                            if (adapted.id != null) {
+                                StoatAPI.members.setMember(gid, adapted)
+                                members++
+                            }
+                        }
+                    }.onFailure {
+                        Log.w("StoatPresence", "bad chunk member: ${it.message}")
+                    }
+                }
+                (d["presences"] as? JsonArray)?.forEach { el ->
+                    runCatching {
+                        val presence = DiscordJson.decodeFromJsonElement(
+                            DiscordPresence.serializer(),
+                            el,
+                        )
+                        applyPresence(presence, "MEMBERS_CHUNK")
+                        presences++
+                    }.onFailure {
+                        Log.w("StoatPresence", "bad chunk presence: ${it.message}")
+                    }
+                }
+                Log.i(
+                    "StoatPresence",
+                    "GUILD_MEMBERS_CHUNK $gid: +$members members, +$presences presences " +
+                        "(chunk=${(d["chunk_index"] as? JsonPrimitive)?.content}/" +
+                        "${(d["chunk_count"] as? JsonPrimitive)?.content})",
+                )
+            }
+
             "RESUMED" -> {
                 DiscordAPI.connected = true
                 DiscordAPI.connectionError = null
@@ -542,6 +651,40 @@ object DiscordGateway {
             else -> {
                 Log.d("DiscordGateway", "Unhandled dispatch: ${payload.t}")
             }
+        }
+    }
+
+    /**
+     * Opcode 14 "Lazy Request" (undocumented; see the unofficial docs):
+     * subscribes to the guild's member list ranges so the server sends
+     * GUILD_MEMBER_LIST_UPDATE events with members + presences, and starts
+     * streaming PRESENCE_UPDATE for that guild. The official client always
+     * requests [0, 99] up front.
+     */
+    private suspend fun WebSocketSession.sendLazyRequest(guildId: String, channelId: String) {
+        val payload = buildJsonObject {
+            put("op", 14)
+            putJsonObject("d") {
+                put("guild_id", guildId)
+                put("typing", true)
+                put("threads", false)
+                put("activities", true)
+                putJsonArray("members") {}
+                putJsonObject("channels") {
+                    putJsonArray(channelId) {
+                        add(buildJsonArray {
+                            add(JsonPrimitive(0))
+                            add(JsonPrimitive(99))
+                        })
+                    }
+                }
+            }
+        }
+        try {
+            send(DiscordJson.encodeToString(JsonObject.serializer(), payload))
+            Log.i("StoatPresence", "Sent lazy request for guild $guildId (channel $channelId)")
+        } catch (e: Exception) {
+            Log.e("StoatPresence", "Failed to send lazy request for $guildId", e)
         }
     }
 
@@ -695,6 +838,10 @@ object DiscordGateway {
         } catch (e: Exception) {
             Log.e("DiscordGateway", "Failed to send PRESENCE_UPDATE", e)
         }
+        // User accounts persist status via PATCH /users/@me/settings (what
+        // the official client does); the gateway op 3 only affects the live
+        // session.
+        patchSelfSettings(discordStatus, customStatusText)
     }
 
     private suspend fun WebSocketSession.sendHeartbeat() {

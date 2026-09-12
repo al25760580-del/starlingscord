@@ -11,6 +11,7 @@ import android.util.Log
 import chat.stoat.discord.DiscordJson
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
+import io.ktor.client.request.patch
 import io.ktor.client.request.post
 import io.ktor.client.request.put
 import io.ktor.client.request.delete
@@ -26,9 +27,11 @@ import io.ktor.utils.io.writeFully
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import java.io.File
 
 @Serializable
@@ -296,6 +299,41 @@ suspend fun HttpClient.fetchDiscordPins(channelId: String): List<DiscordMessage>
     } catch (e: Exception) {
         Log.e("StoatPins", "failed to fetch pins (channel=$channelId)", e)
         emptyList()
+    }
+}
+
+/**
+ * Persists the account's status (and optional custom status text) via
+ * PATCH /users/@me/settings - the endpoint the official user-account client
+ * uses, so the status survives sessions and syncs across devices.
+ */
+suspend fun patchSelfSettings(status: String, customStatusText: String? = null): Boolean {
+    return try {
+        val body = buildJsonObject {
+            put("status", status)
+            if (!customStatusText.isNullOrBlank()) {
+                put("custom_status", buildJsonObject {
+                    put("text", customStatusText)
+                })
+            }
+        }
+        val response = DiscordHttp.patch("$DISCORD_API/users/@me/settings") {
+            contentType(ContentType.Application.Json)
+            setBody(body)
+        }
+        val ok = response.status.isSuccess()
+        if (ok) {
+            Log.i("StoatPresence", "PATCH /users/@me/settings status=$status ok")
+        } else {
+            Log.w(
+                "StoatPresence",
+                "PATCH /users/@me/settings FAILED: HTTP ${response.status.value}",
+            )
+        }
+        ok
+    } catch (e: Exception) {
+        Log.e("StoatPresence", "PATCH /users/@me/settings failed", e)
+        false
     }
 }
 
