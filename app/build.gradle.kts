@@ -89,12 +89,12 @@ android {
             buildConfigField(
                 "String",
                 "SENTRY_DSN",
-                "\"${buildproperty("sentry.dsn", "RVX_SENTRY_DSN")}\""
+                "\"${buildproperty("sentry.dsn", "RVX_SENTRY_DSN") ?: ""}\""
             )
             buildConfigField(
                 "String",
                 "FLAVOUR_ID",
-                "\"${buildproperty("build.flavour_id", "RVX_BUILD_FLAVOUR_ID")}\""
+                "\"${buildproperty("build.flavour_id", "RVX_BUILD_FLAVOUR_ID") ?: ""}\""
             )
         }
 
@@ -112,12 +112,12 @@ android {
             buildConfigField(
                 "String",
                 "SENTRY_DSN",
-                "\"${buildproperty("sentry.dsn", "RVX_SENTRY_DSN")}\""
+                "\"${buildproperty("sentry.dsn", "RVX_SENTRY_DSN") ?: ""}\""
             )
             buildConfigField(
                 "String",
                 "FLAVOUR_ID",
-                "\"${buildproperty("build.flavour_id", "RVX_BUILD_FLAVOUR_ID")}\""
+                "\"${buildproperty("build.flavour_id", "RVX_BUILD_FLAVOUR_ID") ?: "local"}\""
             )
         }
     }
