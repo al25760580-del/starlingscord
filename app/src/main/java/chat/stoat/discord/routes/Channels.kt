@@ -303,6 +303,27 @@ suspend fun HttpClient.fetchDiscordPins(channelId: String): List<DiscordMessage>
 }
 
 /**
+ * GET /gateway: the recommended gateway WebSocket URL (includes the current
+ * gateway version). The docs prescribe fetching + caching this instead of
+ * hardcoding a version; old versions are rejected with close 4012.
+ */
+suspend fun fetchGatewayUrl(): String? {
+    return try {
+        val url = DiscordHttp.get("$DISCORD_API/gateway")
+            .bodyAsText()
+            .let { body ->
+                DiscordJson.parseToJsonElement(body)
+                    .jsonObject["url"]?.jsonPrimitive?.contentOrNull
+            }
+        Log.i("DiscordGateway", "GET /gateway -> $url")
+        url
+    } catch (e: Exception) {
+        Log.w("DiscordGateway", "GET /gateway failed: ${e.message}")
+        null
+    }
+}
+
+/**
  * Persists the account's status (and optional custom status text) via
  * PATCH /users/@me/settings - the endpoint the official user-account client
  * uses, so the status survives sessions and syncs across devices.

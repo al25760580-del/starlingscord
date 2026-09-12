@@ -3,7 +3,10 @@ package chat.stoat.discord
 import android.os.Build
 import android.util.Base64
 import android.util.Log
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import chat.stoat.BuildConfig
 import chat.stoat.core.discord.models.DiscordChannel
 import chat.stoat.core.discord.models.DiscordRole
@@ -31,7 +34,13 @@ import kotlinx.serialization.json.Json
 const val DISCORD_API = "https://discord.com/api/v9"
 
 /** Gateway URL (JSON encoding, gateway protocol v10). */
-const val DISCORD_GATEWAY = "wss://gateway.discord.gg/?v=9&encoding=json"
+/**
+ * Fallback gateway URL; the real one is fetched at runtime via
+ * GET /gateway (what the official client does - the docs prescribe fetching
+ * and caching the WebSocket URL instead of hardcoding it, and old versions
+ * like v=9 get rejected with close code 4012).
+ */
+const val DISCORD_GATEWAY = "wss://gateway.discord.gg/?v=10&encoding=json"
 
 /** Authorization header name used by the Discord API. */
 const val DISCORD_TOKEN_HEADER = "Authorization"
@@ -119,7 +128,9 @@ object DiscordAPI {
     var connected = false
 
     /** Last connection error, surfaced for diagnostics / UI. */
-    var connectionError: String? = null
+    /** Last gateway close reason; surfaced in the reconnect banner so
+     *  failures are visible without logcat. */
+    var connectionError: String? by mutableStateOf<String?>(null)
 
     /**
      * Maps a UI message id (ULID derived from the snowflake timestamp) back to

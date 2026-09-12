@@ -32,6 +32,7 @@ import chat.stoat.discord.DISCORD_GATEWAY
 import chat.stoat.discord.DiscordAPI
 import chat.stoat.discord.DiscordHttp
 import chat.stoat.discord.DiscordJson
+import chat.stoat.discord.routes.fetchGatewayUrl
 import chat.stoat.discord.routes.fetchSelfStatus
 import chat.stoat.discord.routes.patchSelfSettings
 import io.ktor.client.plugins.websocket.ws
@@ -86,6 +87,10 @@ object DiscordGateway {
     @Volatile
     private var resumeGatewayUrl: String? = null
 
+    /** Recommended gateway URL from GET /gateway (cached per session). */
+    @Volatile
+    private var cachedGatewayUrl: String? = null
+
     /** Whether the current session can be resumed (set on READY, cleared on invalid session). */
     @Volatile
     private var canResume = false
@@ -99,11 +104,16 @@ object DiscordGateway {
         RealtimeSocket.updateDisconnectionState(DisconnectionState.Reconnecting)
         // After a drop, resume via resume_gateway_url instead of the default
         // gateway (docs: not doing so causes disconnects at a higher rate).
+        // Fresh connections use the URL from GET /gateway (fetched and cached
+        // like the official client; a hardcoded old version such as v=9 gets
+        // rejected with close code 4012, which caused an infinite reconnect
+        // loop and zero live events).
         val gatewayUrl = if (canResume && resumeGatewayUrl != null) {
             resumeGatewayUrl!!
         } else {
-            DISCORD_GATEWAY
+            cachedGatewayUrl ?: fetchGatewayUrl()?.also { cachedGatewayUrl = it } ?: DISCORD_GATEWAY
         }
+        Log.i("DiscordGateway", "Connecting to $gatewayUrl (resume=$canResume)")
         DiscordHttp.ws(gatewayUrl) {
             socket = this
             var heartbeatJob: Job? = null
@@ -210,6 +220,17 @@ object DiscordGateway {
                             "Gateway closed by server: code=${reason.code}, message='${reason.message}'",
                         )
                         DiscordAPI.connectionError = "Gateway closed: ${reason.code} ${reason.message}"
+                        // 1000/1001 invalidate the session outright; 4006/4007/
+                        // 4009 mean the resume data is no longer valid. Clear
+                        // it so the next attempt does a fresh IDENTIFY instead
+                        // of looping on a dead RESUME.
+                        when (reason.code.toInt()) {
+                            1000, 1001, 4006, 4007, 4009 -> {
+                                canResume = false
+                                lastSeq = null
+                                Log.w("DiscordGateway", "Session invalidated by close code; will re-identify")
+                            }
+                        }
                     } else {
                         Log.w("DiscordGateway", "Gateway closed (server provided no close reason)")
                         DiscordAPI.connectionError = "Gateway connection closed"

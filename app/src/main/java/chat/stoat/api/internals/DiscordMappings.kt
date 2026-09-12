@@ -525,25 +525,52 @@ object DiscordMappings {
     private fun adaptEmbed(e: DiscordEmbed): Embed {
         val colour = e.color?.let { String.format("#%06X", it and 0xFFFFFF) }
 
-        // GIFV (Tenor & friends): an mp4 that the official clients play inline
-        // like an autoplaying, looping GIF.
+        // Like the official client:
+        //  - gifv media from GIF providers (Tenor/Giphy/Klipy) plays inline
+        //    as an autoplaying looping GIF;
+        //  - direct video FILES (.mp4/.webm/.mov) get the full player;
+        //  - everything else with a video field (YouTube etc. embeds, whose
+        //    video.url is an iframe page, NOT a playable file) renders as a
+        //    website card with the thumbnail - never a broken player.
         val video = e.video
-        if (video?.url != null) {
-            // Only GIF-provider domains (Tenor, Giphy, Klipy) autoplay
-            // inline; any other gifv video goes to the full player.
-            val type = if (isGifProviderUrl(video.url)) "Gif" else "Video"
-            return Embed(
-                type = type,
-                url = e.url ?: video.url,
-                originalURL = e.url,
-                video = Image(
-                    url = video.url,
-                    width = video.width?.toLong(),
-                    height = video.height?.toLong(),
-                ),
-                width = video.width?.toLong(),
-                height = video.height?.toLong(),
-            )
+        val videoUrl = video?.url
+        if (videoUrl != null) {
+            val gifProvider = isGifProviderUrl(videoUrl) || isGifProviderUrl(e.url)
+            val isDirectVideoFile = listOf(".mp4", ".webm", ".mov").any {
+                videoUrl.substringBefore('?').endsWith(it)
+            }
+            when {
+                // Tenor/Giphy/Klipy gifv: inline looping GIF.
+                gifProvider -> return Embed(
+                    type = "Gif",
+                    url = e.url ?: videoUrl,
+                    originalURL = e.url,
+                    video = Image(
+                        url = videoUrl,
+                        width = video?.width?.toLong(),
+                        height = video?.height?.toLong(),
+                    ),
+                    width = video?.width?.toLong(),
+                    height = video?.height?.toLong(),
+                )
+
+                // Direct playable video file: full player with controls.
+                isDirectVideoFile -> return Embed(
+                    type = "Video",
+                    url = videoUrl,
+                    originalURL = e.url ?: videoUrl,
+                    video = Image(
+                        url = videoUrl,
+                        width = video?.width?.toLong(),
+                        height = video?.height?.toLong(),
+                    ),
+                    width = video?.width?.toLong(),
+                    height = video?.height?.toLong(),
+                )
+
+                // YouTube and friends (video.url is a page, not a file):
+                // fall through to the website card with the thumbnail.
+            }
         }
 
         // Bare image links arrive as type "image" with just an image field:
