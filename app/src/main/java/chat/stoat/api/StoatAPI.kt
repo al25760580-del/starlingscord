@@ -116,6 +116,11 @@ object StoatAPI {
         sessionId = id
     }
 
+    /** App-lifetime scope: survives UI composition (unlike
+     *  rememberCoroutineScope / LaunchedEffect, whose cancellation killed
+     *  critical writes like the status-settings PATCH when a sheet closed). */
+    val appScope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+
     suspend fun loginAs(token: String) {
         // Step-by-step diagnostic trail: if login ever stalls again we need
         // to know WHICH call hung (live incident: an account flagged by
@@ -128,9 +133,17 @@ object StoatAPI {
         try {
             Log.i("StoatLogin", "loginAs: fetching self (+profile)…")
             fetchSelf()
-            Log.i("StoatLogin", "loginAs: self ok (${elapsed()}); populating caches from REST…")
-            DiscordMappings.populateFromRest()
-            Log.i("StoatLogin", "loginAs: caches ok (${elapsed()}); starting socket ops…")
+            Log.i("StoatLogin", "loginAs: self ok (${elapsed()}); REST hydration moves to background")
+            // Guild/DM REST hydration (channels/members/roles/emojis) used to
+            // BLOCK login and took 33s on a flaky network (live logcat) - and
+            // it is redundant with the gateway, which delivers full guilds in
+            // READY/GUILD_CREATE. It now refills caches in the background.
+            appScope.launch {
+                runCatching { DiscordMappings.populateFromRest() }
+                    .onSuccess { Log.i("StoatLogin", "background REST hydration complete") }
+                    .onFailure { Log.w("StoatLogin", "background REST hydration failed: ${it.message}") }
+            }
+            Log.i("StoatLogin", "loginAs: starting socket ops…")
             startSocketOps()
             Log.i("StoatLogin", "loginAs: socket ops started (${elapsed()}); syncing unreads…")
             unreads.sync()

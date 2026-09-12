@@ -1044,10 +1044,16 @@ internal fun redactToken(json: String, token: String): String =
             )
             Log.i("StoatPresence", "Local self presence set to $discordStatus")
         }
-        // User accounts persist status via PATCH /users/@me/settings (what
-        // the official client does); the gateway op 3 only affects the live
-        // session.
-        patchSelfSettings(discordStatus, customStatusText)
+        // Persist the status via PATCH /users/@me/settings (what the official
+        // client does); the gateway op 3 above only affects the live session.
+        // Runs on the app-lifetime scope: closing the status sheet used to
+        // cancel this PATCH mid-flight (CancellationException from
+        // rememberCoroutineScope), silently dropping persistence.
+        StoatAPI.appScope.launch {
+            runCatching { patchSelfSettings(discordStatus, customStatusText) }
+                .onSuccess { Log.i("StoatPresence", "PATCH /users/@me/settings ok (status=$discordStatus)") }
+                .onFailure { Log.e("StoatPresence", "PATCH /users/@me/settings failed", it) }
+        }
     }
 
     private suspend fun WebSocketSession.sendHeartbeat() {
