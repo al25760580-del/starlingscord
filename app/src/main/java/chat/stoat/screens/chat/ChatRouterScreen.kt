@@ -315,7 +315,11 @@ class ChatRouterViewModel(
         viewModelScope.launch {
             val latestChangelog = runCatching { getLatestChangelog() }
                 .onFailure {
-                    logcat(LogPriority.ERROR) { "Failed to fetch latest changelog: ${it.message}" }
+                    // Expected: there is no changelog feed on the Discord
+                    // backend - don't log it as an error on every startup.
+                    if (it.message?.contains("No changelog available") != true) {
+                        logcat(LogPriority.ERROR) { "Failed to fetch latest changelog: ${it.message}" }
+                    }
                 }
                 .getOrNull()
 

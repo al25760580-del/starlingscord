@@ -564,12 +564,18 @@ class ChannelScreenViewModel(
             }
 
             val nonce = ULID.makeNext()
+            // Discord rejects string nonces over 25 chars (live-verified:
+            // 400 NONCE_TYPE_TOO_LONG "Debe tener 25 caracteres o menos"),
+            // and a 26-char ULID is exactly one over. The wire nonce is the
+            // deterministic first 25 chars of the ULID, so both the REST
+            // response and the gateway echo match the pending bubble.
+            val wireNonce = nonce.take(25)
             val prospectiveMessage = Message(
                 id = nonce,
                 channel = channel?.id,
                 author = StoatAPI.selfId,
                 content = content,
-                nonce = nonce,
+                nonce = wireNonce,
                 attachments = listOf(),
                 replies = listOf(),
                 tail = items.firstOrNull()?.let {
@@ -616,10 +622,10 @@ class ChannelScreenViewModel(
                         // The nonce is echoed on the REST response AND the
                         // gateway MESSAGE_CREATE; whichever the UI sees first
                         // swaps out the prospective (pending) bubble.
-                        nonce = nonce,
+                        nonce = wireNonce,
                     )
                     val adapted =
-                        sent?.let { DiscordMappings.adaptMessage(it) }?.copy(nonce = nonce)
+                        sent?.let { DiscordMappings.adaptMessage(it) }?.copy(nonce = wireNonce)
                     if (adapted != null) {
                         adapted.id?.let { StoatAPI.messageCache[it] = adapted }
                         StoatAPI.wsFrameChannel.tryEmit(adapted)
@@ -968,7 +974,7 @@ class ChannelScreenViewModel(
                             if (it.nonce != null) {
                                 updateItems(items.filter { m ->
                                     if (m is ChannelScreenItem.ProspectiveMessage) {
-                                        m.message.id != it.nonce
+                                        m.message.nonce != it.nonce
                                     } else {
                                         true
                                     }
@@ -984,7 +990,7 @@ class ChannelScreenViewModel(
                             }
                             updateItems(listOf(newItem) + items.filter { m ->
                                 if (m is ChannelScreenItem.ProspectiveMessage) {
-                                    m.message.id != it.nonce
+                                    m.message.nonce != it.nonce
                                 } else {
                                     true
                                 }

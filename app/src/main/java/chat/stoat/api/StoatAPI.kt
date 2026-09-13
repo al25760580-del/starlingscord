@@ -116,12 +116,42 @@ object StoatAPI {
         sessionId = id
     }
 
+    /** App-lifetime scope: survives UI composition (unlike
+     *  rememberCoroutineScope / LaunchedEffect, whose cancellation killed
+     *  critical writes like the status-settings PATCH when a sheet closed). */
+    val appScope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+
     suspend fun loginAs(token: String) {
+        // Step-by-step diagnostic trail: if login ever stalls again we need
+        // to know WHICH call hung (live incident: an account flagged by
+        // Discord's "new login detected" security flow left a REST call
+        // hanging forever and the app sat on the login screen silently).
+        val t0 = System.currentTimeMillis()
+        fun elapsed() = "${System.currentTimeMillis() - t0}ms"
+        Log.i("StoatLogin", "loginAs: start")
         setSessionHeader(token)
-        fetchSelf()
-        DiscordMappings.populateFromRest()
-        startSocketOps()
-        unreads.sync()
+        try {
+            Log.i("StoatLogin", "loginAs: fetching self (+profile)…")
+            fetchSelf()
+            Log.i("StoatLogin", "loginAs: self ok (${elapsed()}); REST hydration moves to background")
+            // Guild/DM REST hydration (channels/members/roles/emojis) used to
+            // BLOCK login and took 33s on a flaky network (live logcat) - and
+            // it is redundant with the gateway, which delivers full guilds in
+            // READY/GUILD_CREATE. It now refills caches in the background.
+            appScope.launch {
+                runCatching { DiscordMappings.populateFromRest() }
+                    .onSuccess { Log.i("StoatLogin", "background REST hydration complete") }
+                    .onFailure { Log.w("StoatLogin", "background REST hydration failed: ${it.message}") }
+            }
+            Log.i("StoatLogin", "loginAs: starting socket ops…")
+            startSocketOps()
+            Log.i("StoatLogin", "loginAs: socket ops started (${elapsed()}); syncing unreads…")
+            unreads.sync()
+            Log.i("StoatLogin", "loginAs: COMPLETE (${elapsed()})")
+        } catch (e: Exception) {
+            Log.e("StoatLogin", "loginAs: FAILED at ${elapsed()}: ${e::class.simpleName}: ${e.message}")
+            throw e
+        }
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)

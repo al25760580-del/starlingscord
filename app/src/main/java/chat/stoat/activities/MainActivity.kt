@@ -345,9 +345,22 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        SentryAndroid.init(this) { options ->
-            options.dsn = BuildConfig.SENTRY_DSN
-            options.release = BuildConfig.VERSION_NAME
+        // Crash reporting is OPTIONAL: a missing/invalid DSN (e.g. builds
+        // without stoatbuild.properties bake "" or the literal "null") must
+        // never take the app down at startup - it did exactly that with
+        // "Invalid DSN scheme: null" (IllegalArgumentException inside
+        // SentryAndroid.init). Only initialize when a plausible http(s) DSN
+        // is present, and guard the whole init regardless.
+        runCatching {
+            val dsn = BuildConfig.SENTRY_DSN
+            if (!dsn.isNullOrBlank() && dsn != "null" && dsn.startsWith("http")) {
+                SentryAndroid.init(this) { options ->
+                    options.dsn = dsn
+                    options.release = BuildConfig.VERSION_NAME
+                }
+            }
+        }.onFailure {
+            android.util.Log.w("MainActivity", "Sentry init skipped/failed (non-fatal)", it)
         }
 
         @Suppress("DEPRECATION") // We are fixing a bug in the splash screen

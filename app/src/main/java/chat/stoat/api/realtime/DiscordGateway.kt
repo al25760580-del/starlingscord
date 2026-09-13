@@ -30,6 +30,8 @@ import chat.stoat.discord.DiscordJson
 import chat.stoat.discord.routes.fetchGatewayUrl
 import chat.stoat.discord.routes.fetchSelfStatus
 import chat.stoat.discord.routes.patchSelfSettings
+import io.ktor.client.plugins.HttpTimeoutConfig
+import io.ktor.client.plugins.timeout
 import io.ktor.client.plugins.websocket.ws
 import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
@@ -119,7 +121,17 @@ object DiscordGateway {
             cachedGatewayUrl ?: fetchGatewayUrl()?.also { cachedGatewayUrl = it } ?: DISCORD_GATEWAY
         }
         Log.i("DiscordGateway", "Connecting to $gatewayUrl (resume=$canResume)")
-        DiscordHttp.ws(gatewayUrl) {
+        DiscordHttp.ws(
+            gatewayUrl,
+            {
+                // The gateway is long-lived; the global 20s request timeout
+                // would kill the session right after the upgrade (KTOR-3337).
+                // The heartbeat loop already handles dead connections.
+                timeout {
+                    requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
+                }
+            },
+        ) {
             socket = this
             var heartbeatJob: Job? = null
             try {
@@ -1032,10 +1044,16 @@ internal fun redactToken(json: String, token: String): String =
             )
             Log.i("StoatPresence", "Local self presence set to $discordStatus")
         }
-        // User accounts persist status via PATCH /users/@me/settings (what
-        // the official client does); the gateway op 3 only affects the live
-        // session.
-        patchSelfSettings(discordStatus, customStatusText)
+        // Persist the status via PATCH /users/@me/settings (what the official
+        // client does); the gateway op 3 above only affects the live session.
+        // Runs on the app-lifetime scope: closing the status sheet used to
+        // cancel this PATCH mid-flight (CancellationException from
+        // rememberCoroutineScope), silently dropping persistence.
+        StoatAPI.appScope.launch {
+            runCatching { patchSelfSettings(discordStatus, customStatusText) }
+                .onSuccess { Log.i("StoatPresence", "PATCH /users/@me/settings ok (status=$discordStatus)") }
+                .onFailure { Log.e("StoatPresence", "PATCH /users/@me/settings failed", it) }
+        }
     }
 
     private suspend fun WebSocketSession.sendHeartbeat() {
