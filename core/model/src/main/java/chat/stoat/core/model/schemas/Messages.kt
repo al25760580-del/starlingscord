@@ -62,6 +62,7 @@ data class Embed(
     val title: String? = null,
     val description: String? = null,
     val image: Image? = null,
+    val video: Image? = null,
 
     @SerialName("icon_url")
     val iconURL: String? = null,

@@ -59,7 +59,8 @@ import chat.stoat.api.internals.ChannelUtils
 import chat.stoat.api.routes.channel.sendMessage
 import chat.stoat.api.routes.microservices.autumn.FileArgs
 import chat.stoat.api.routes.microservices.autumn.MAX_ATTACHMENTS_PER_MESSAGE
-import chat.stoat.api.routes.microservices.autumn.uploadToAutumn
+import chat.stoat.discord.routes.DiscordAttachmentRef
+import chat.stoat.discord.routes.uploadChannelAttachment
 import chat.stoat.api.settings.LoadedSettings
 import chat.stoat.api.settings.SyncedSettings
 import chat.stoat.composables.chat.MessageField
@@ -202,14 +203,6 @@ class ShareTargetScreenViewModel(
     }
 
     suspend fun initialiseAPI() {
-        if (DiscordAPI.isActive || kvStorage.get("auth_backend") == "discord") {
-            val discordToken = kvStorage.get("discord_session_token")
-            if (!discordToken.isNullOrBlank()) {
-                DiscordAPI.loginAs(discordToken)
-                apiIsReady = true
-                return
-            }
-        }
         if (!StoatAPI.isLoggedIn()) {
             val token = kvStorage.get("sessionToken") ?: return
             StoatAPI.loginAs(token)
@@ -220,23 +213,23 @@ class ShareTargetScreenViewModel(
 
     fun send(channelId: String, onFinished: () -> Unit) {
         viewModelScope.launch {
-            val attachmentIds = arrayListOf<String>()
+            val uploadRefs = arrayListOf<DiscordAttachmentRef>()
             val takenAttachments = attachments.take(MAX_ATTACHMENTS_PER_MESSAGE)
             val totalTaken = takenAttachments.size
 
             takenAttachments.forEachIndexed { index, it ->
                 try {
-                    val id = uploadToAutumn(
-                        it.file,
-                        it.filename,
-                        "attachments",
-                        ContentType.parse(it.contentType),
-                        onProgress = { current, total ->
-                            attachmentProgress =
-                                ((current.toFloat() / total.toFloat()) / totalTaken.toFloat()) + (index.toFloat() / totalTaken.toFloat())
-                        }
+                    uploadRefs.add(
+                        uploadChannelAttachment(
+                            channelId = channelId,
+                            file = it.file,
+                            filename = it.filename,
+                            onProgress = { current, total ->
+                                attachmentProgress =
+                                    ((current.toFloat() / total.toFloat()) / totalTaken.toFloat()) + (index.toFloat() / totalTaken.toFloat())
+                            }
+                        )
                     )
-                    attachmentIds.add(id)
                 } catch (e: Exception) {
                     return@launch
                 }
@@ -245,7 +238,7 @@ class ShareTargetScreenViewModel(
             sendMessage(
                 channelId = channelId,
                 content = messageContent,
-                attachments = attachmentIds
+                attachments = uploadRefs
             )
 
             onFinished()

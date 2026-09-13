@@ -1,29 +1,23 @@
 package chat.stoat.api.routes.account
 
-import android.os.Build
-import android.util.Log
 import chat.stoat.api.StoatAPIError
-import chat.stoat.api.StoatHttp
-import chat.stoat.api.StoatJson
-import chat.stoat.api.api
-import io.ktor.client.request.post
-import io.ktor.client.request.setBody
-import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.bodyAsText
-import io.ktor.http.ContentType
-import io.ktor.http.HttpStatusCode
-import io.ktor.http.contentType
+import chat.stoat.discord.DiscordHttp
+import chat.stoat.discord.routes.DiscordLoginError
+import chat.stoat.discord.routes.DiscordLoginMfaRequired
+import chat.stoat.discord.routes.DiscordLoginResult
+import chat.stoat.discord.routes.DiscordLoginSuccess
+import chat.stoat.discord.routes.discordLogin
+import chat.stoat.discord.routes.discordVerifyMfa
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.descriptors.PolymorphicKind
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildSerialDescriptor
-import kotlinx.serialization.encoding.Decoder
-import kotlinx.serialization.encoding.Encoder
 
 @Serializable
 data class LoginNegotiation(
@@ -83,26 +77,6 @@ data class MfaResponseTotpCode(
     val totpCode: String
 ) : MfaResponse
 
-object MfaResponseSerializer : KSerializer<MfaResponse> {
-    @OptIn(InternalSerializationApi::class, ExperimentalSerializationApi::class)
-    override val descriptor: SerialDescriptor =
-        buildSerialDescriptor("MfaResponse", PolymorphicKind.SEALED)
-
-    override fun serialize(encoder: Encoder, value: MfaResponse) = when (value) {
-        is MfaResponsePassword ->
-            encoder.encodeSerializableValue(MfaResponsePassword.serializer(), value)
-
-        is MfaResponseRecoveryCode ->
-            encoder.encodeSerializableValue(MfaResponseRecoveryCode.serializer(), value)
-
-        is MfaResponseTotpCode ->
-            encoder.encodeSerializableValue(MfaResponseTotpCode.serializer(), value)
-    }
-
-    override fun deserialize(decoder: Decoder): MfaResponse =
-        throw UnsupportedOperationException("MfaResponse is only ever sent to the API")
-}
-
 @Serializable
 data class MfaLoginSpec(
     val result: String,
@@ -147,96 +121,103 @@ data class EmailPasswordAssessment(
     val error: StoatAPIError? = null
 )
 
+/**
+ * Logs in against Discord's user API (`POST /auth/login`). Returns either a
+ * session token (mapped into [UserHints]) or an MFA ticket when 2FA is
+ * enabled on the account.
+ */
 suspend fun negotiateAuthentication(email: String, password: String): EmailPasswordAssessment {
-    val sessionName = friendlySessionName()
-
-    val response: HttpResponse = StoatHttp.post("/auth/session/login".api()) {
-        contentType(ContentType.Application.Json)
-        setBody(LoginNegotiation(email, password, sessionName, null))
-    }
-
-    val responseContent = response.bodyAsText()
-    Log.d("Stoat", "negotiateAuthentication: $responseContent")
-
-    try {
-        val error = StoatJson.decodeFromString(StoatAPIError.serializer(), responseContent)
-        return EmailPasswordAssessment(error = error)
-    } catch (e: SerializationException) {
-        // Not an error
-    }
-
-    if (response.status == HttpStatusCode.InternalServerError) {
-        return EmailPasswordAssessment(
-            error = StoatAPIError(
-                "InternalServerError"
+    return when (val result: DiscordLoginResult = DiscordHttp.discordLogin(email, password)) {
+        is DiscordLoginSuccess -> EmailPasswordAssessment(
+            firstUserHints = UserHints(
+                result = "Success",
+                id = result.userId ?: "discord",
+                userId = result.userId ?: "",
+                token = result.token,
+                name = "Discord"
             )
         )
-    }
 
-    val responseJson = StoatJson.decodeFromString(MfaCheck.serializer(), responseContent)
-
-    return when (responseJson.result) {
-        "Success" -> EmailPasswordAssessment(
-            firstUserHints = StoatJson.decodeFromString(UserHints.serializer(), responseContent)
-        )
-
-        "MFA" -> EmailPasswordAssessment(
+        is DiscordLoginMfaRequired -> EmailPasswordAssessment(
             proceedMfa = true,
-            mfaSpec = StoatJson.decodeFromString(MfaLoginSpec.serializer(), responseContent)
+            mfaSpec = MfaLoginSpec(
+                result = "MFA",
+                ticket = result.ticket,
+                allowedMethods = buildList {
+                    add("Totp")
+                    if (result.backup) add("Recovery")
+                }
+            )
         )
 
-        else -> throw Exception("Unknown result: ${responseJson.result}")
+        is DiscordLoginError -> EmailPasswordAssessment(
+            error = StoatAPIError(result.message)
+        )
     }
 }
 
+/** Completes login with a TOTP code (`POST /auth/mfa/totp`). */
 suspend fun authenticateWithMfaTotpCode(
     mfaTicket: String,
     mfaResponse: MfaResponseTotpCode
 ): EmailPasswordAssessment {
-    val response: HttpResponse = StoatHttp.post("/auth/session/login".api()) {
-        contentType(ContentType.Application.Json)
-        setBody(LoginMfaAmendmentTotpCode(mfaTicket, mfaResponse, friendlySessionName()))
-    }
-
-    try {
-        val error = StoatJson.decodeFromString(StoatAPIError.serializer(), response.bodyAsText())
-        return EmailPasswordAssessment(error = error)
-    } catch (e: SerializationException) {
-        // Not an error
-    }
-
-    val responseContent = response.bodyAsText()
-    Log.d("Stoat", "authenticateWithMfaTotpCode: $responseContent")
-
-    return EmailPasswordAssessment(
-        firstUserHints = StoatJson.decodeFromString(UserHints.serializer(), responseContent)
-    )
+    return verifyDiscordMfa(mfaTicket, mfaResponse.totpCode, "totp")
 }
 
+/** Completes login with a backup/recovery code (`POST /auth/mfa/backup`). */
 suspend fun authenticateWithMfaRecoveryCode(
     mfaTicket: String,
     mfaResponse: MfaResponseRecoveryCode
 ): EmailPasswordAssessment {
-    val response: HttpResponse = StoatHttp.post("/auth/session/login".api()) {
-        contentType(ContentType.Application.Json)
-        setBody(LoginMfaAmendmentRecoveryCode(mfaTicket, mfaResponse, friendlySessionName()))
+    return verifyDiscordMfa(mfaTicket, mfaResponse.recoveryCode, "backup")
+}
+
+private suspend fun verifyDiscordMfa(
+    mfaTicket: String,
+    code: String,
+    type: String
+): EmailPasswordAssessment {
+    return when (val result: DiscordLoginResult = DiscordHttp.discordVerifyMfa(mfaTicket, code, type)) {
+        is DiscordLoginSuccess -> EmailPasswordAssessment(
+            firstUserHints = UserHints(
+                result = "Success",
+                id = result.userId ?: "discord",
+                userId = result.userId ?: "",
+                token = result.token,
+                name = "Discord"
+            )
+        )
+
+        is DiscordLoginMfaRequired -> EmailPasswordAssessment(
+            error = StoatAPIError("InvalidMfaCode")
+        )
+
+        is DiscordLoginError -> EmailPasswordAssessment(
+            error = StoatAPIError(result.message)
+        )
     }
-
-    try {
-        val error = StoatJson.decodeFromString(StoatAPIError.serializer(), response.bodyAsText())
-        return EmailPasswordAssessment(error = error)
-    } catch (e: SerializationException) {
-        // Not an error
-    }
-
-    val responseContent = response.bodyAsText()
-    Log.d("Stoat", "authenticateWithMfaRecoveryCode: $responseContent")
-
-    return EmailPasswordAssessment(
-        firstUserHints = StoatJson.decodeFromString(UserHints.serializer(), responseContent)
-    )
 }
 
 fun friendlySessionName(): String {
-    return "Stoat for Android on ${Build.MANUFACTURER} ${Build.MODEL}"
+    return "Stoat for Android on ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}"
+}
+
+object MfaResponseSerializer : KSerializer<MfaResponse> {
+    @OptIn(InternalSerializationApi::class, ExperimentalSerializationApi::class)
+    override val descriptor: SerialDescriptor =
+        buildSerialDescriptor("MfaResponse", PolymorphicKind.SEALED)
+
+    override fun serialize(encoder: Encoder, value: MfaResponse) = when (value) {
+        is MfaResponsePassword ->
+            encoder.encodeSerializableValue(MfaResponsePassword.serializer(), value)
+
+        is MfaResponseRecoveryCode ->
+            encoder.encodeSerializableValue(MfaResponseRecoveryCode.serializer(), value)
+
+        is MfaResponseTotpCode ->
+            encoder.encodeSerializableValue(MfaResponseTotpCode.serializer(), value)
+    }
+
+    override fun deserialize(decoder: Decoder): MfaResponse =
+        throw UnsupportedOperationException("MfaResponse is only ever sent to the API")
 }

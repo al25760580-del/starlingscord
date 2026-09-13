@@ -49,6 +49,7 @@ import chat.stoat.R
 import chat.stoat.activities.InviteActivity
 import chat.stoat.api.StoatAPI
 import chat.stoat.api.internals.isUlid
+import chat.stoat.core.discord.models.DiscordGuildEmoji
 import chat.stoat.discord.DiscordAPI
 import chat.stoat.api.routes.custom.fetchEmoji
 import chat.stoat.api.settings.LoadedSettings
@@ -131,8 +132,9 @@ private fun collectEmoteUlids(node: ASTNode, content: String): List<String> {
         when (child.type) {
             CUSTOM_EMOTE_ELEMENT_TYPE -> {
                 val text = child.getTextInNode(content).toString()
-                ulids += if (text.startsWith("<:")) {
-                    // Discord custom emoji: keep just the snowflake id
+                ulids += if (text.startsWith("<")) {
+                    // Discord custom emoji (<:name:id> and animated <a:name:id>):
+                    // keep just the snowflake id
                     text.removeSurrounding("<", ">").substringAfterLast(":")
                 } else {
                     text.removeSurrounding(":")
@@ -276,12 +278,30 @@ fun ChatMarkdown(
             when (child.type) {
                 CUSTOM_EMOTE_ELEMENT_TYPE -> {
                     val raw = child.getTextInNode(content).toString()
-                    if (raw.startsWith("<:")) {
+                    if (raw.startsWith("<")) {
                         // Discord custom emoji: <:name:id> / <a:name:id>
                         val id = raw.removeSurrounding("<", ">").substringAfterLast(":")
-                        val info = DiscordAPI.emojiCache[id]
-                        val name = info?.name ?: raw
-                        appendInlineContent("discorde:$id", name)
+                        var info = DiscordAPI.emojiCache[id]
+                        if (info == null) {
+                            // Emoji from a server we're not in (or not cached
+                            // yet): register it from the tag itself — the a-
+                            // prefix carries the animated flag — so it renders
+                            // from the Discord CDN instead of a broken
+                            // placeholder. guildId=null keeps it out of the
+                            // picker's server sections.
+                            val animated = raw.startsWith("<a:")
+                            val name = raw.removeSurrounding("<", ">")
+                                .let { if (animated) it.removePrefix("a:") else it }
+                                .substringBeforeLast(":")
+                            info = DiscordGuildEmoji(
+                                id = id,
+                                name = name,
+                                animated = animated,
+                                guildId = null,
+                            )
+                            DiscordAPI.emojiCache[id] = info
+                        }
+                        appendInlineContent("discorde:$id", info.name ?: raw)
                     } else {
                         val ulid = raw.removeSurrounding(":")
                         val name = StoatAPI.emojiCache[ulid]?.name ?: ":$ulid:"
@@ -329,7 +349,9 @@ fun ChatMarkdown(
 
                 ROLE_MENTION_ELEMENT_TYPE -> {
                     val raw = child.getTextInNode(content).toString()
-                    val roleId = raw.substring(2, raw.length - 1)
+                    // `<@&id>` leaves the '&' after stripping `<@` + `>`.
+                    var roleId = raw.substring(2, raw.length - 1)
+                    if (roleId.startsWith("&")) roleId = roleId.substring(1)
                     // Discord role ids are decimal snowflakes, not ULIDs, so look
                     // the role up regardless of id format.
                     val role = serverId?.let { StoatAPI.serverCache[it]?.roles?.get(roleId) }
@@ -553,7 +575,10 @@ fun ChatMarkdown(
                                 } else {
                                     with(LocalDensity.current) {
                                         RemoteImage(
-                                            url = if (discordEmote != null) "https://cdn.discordapp.com/emojis/${discordEmote.id}.png" else "$STOAT_FILES/emojis/$emoteKey",
+                                            url = if (discordEmote != null) {
+                                                "https://cdn.discordapp.com/emojis/${discordEmote.id}" +
+                                                        if (discordEmote.animated == true) ".gif" else ".png"
+                                            } else "$STOAT_FILES/emojis/$emoteKey",
                                             description = discordEmote?.name ?: emote?.name,
                                             contentScale = ContentScale.Fit,
                                             modifier = Modifier

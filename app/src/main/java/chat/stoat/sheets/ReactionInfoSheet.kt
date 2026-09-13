@@ -45,7 +45,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import chat.stoat.R
 import chat.stoat.api.StoatAPI
+import chat.stoat.api.internals.DiscordMappings
 import chat.stoat.api.internals.isUlid
+import chat.stoat.discord.DiscordAPI
 import chat.stoat.api.routes.custom.fetchEmoji
 import chat.stoat.api.routes.user.fetchUser
 import chat.stoat.api.settings.LoadedSettings
@@ -71,8 +73,10 @@ fun ReactionInfoSheet(messageId: String, emoji: String, onDismiss: () -> Unit) {
             .distinct()
             .filterNot { it.isEmpty() }
             .sortedBy {
-                if (it.isUlid()) {
-                    StoatAPI.emojiCache[it]?.name ?: it.codePointAt(0).toString()
+                if (it.isUlid() || DiscordAPI.emojiCache.containsKey(it)) {
+                    DiscordAPI.emojiCache[it]?.name
+                        ?: StoatAPI.emojiCache[it]?.name
+                        ?: it.codePointAt(0).toString()
                 } else {
                     it.codePointAt(0).toString()
                 }
@@ -85,7 +89,9 @@ fun ReactionInfoSheet(messageId: String, emoji: String, onDismiss: () -> Unit) {
 
     LaunchedEffect(reactionEmoji) {
         reactionEmoji?.forEach {
-            if (it.isUlid()) {
+            // ULIDs are Revolt emojis; numeric snowflakes are Discord ones
+            // (registered into DiscordAPI.emojiCache when reactions adapt).
+            if (it.isUlid() || DiscordAPI.emojiCache.containsKey(it)) {
                 extendedEmojiInfo.add(StoatAPI.emojiCache[it] ?: fetchEmoji(it))
             }
         }
@@ -116,10 +122,16 @@ fun ReactionInfoSheet(messageId: String, emoji: String, onDismiss: () -> Unit) {
                     reactionEmoji.forEachIndexed { index, emoji ->
                         Tab(
                             text = {
-                                if (emoji.isUlid()) {
+                                if (emoji.isUlid() || DiscordAPI.emojiCache.containsKey(emoji)) {
+                                    val discordInfo = DiscordAPI.emojiCache[emoji]
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         RemoteImage(
-                                            url = "$STOAT_FILES/emojis/${emoji}",
+                                            url = if (emoji.isUlid()) {
+                                                "$STOAT_FILES/emojis/${emoji}"
+                                            } else {
+                                                "https://cdn.discordapp.com/emojis/${emoji}" +
+                                                    if (discordInfo?.animated == true) ".gif" else ".png"
+                                            },
                                             description = null,
                                             modifier = Modifier.size(16.dp)
                                         )
@@ -226,10 +238,16 @@ fun ReactionInfoSheet(messageId: String, emoji: String, onDismiss: () -> Unit) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (current.isUlid()) {
+                        if (current.isUlid() || DiscordAPI.emojiCache.containsKey(current)) {
                             val cached = extendedEmojiInfo.find { it.id == current }
+                            val discordInfo = DiscordAPI.emojiCache[current]
                             RemoteImage(
-                                url = "$STOAT_FILES/emojis/$current",
+                                url = if (current.isUlid()) {
+                                    "$STOAT_FILES/emojis/$current"
+                                } else {
+                                    "https://cdn.discordapp.com/emojis/$current" +
+                                        if (discordInfo?.animated == true) ".gif" else ".png"
+                                },
                                 description = cached?.name,
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier
@@ -266,10 +284,10 @@ fun ReactionInfoSheet(messageId: String, emoji: String, onDismiss: () -> Unit) {
                         Spacer(modifier = Modifier.width(16.dp))
 
                         Column {
-                            if (current.isUlid()) {
+                            if (current.isUlid() || DiscordAPI.emojiCache.containsKey(current)) {
                                 val cached = extendedEmojiInfo.find { it.id == current }
                                 Text(
-                                    text = ":${cached?.name ?: current}:",
+                                    text = ":${cached?.name ?: DiscordAPI.emojiCache[current]?.name ?: current}:",
                                     fontWeight = FontWeight.SemiBold,
                                     letterSpacing = 1.15.sp
                                 )
@@ -285,7 +303,7 @@ fun ReactionInfoSheet(messageId: String, emoji: String, onDismiss: () -> Unit) {
                             Spacer(modifier = Modifier.height(4.dp))
 
                             Text(
-                                text = if (current.isUlid()) {
+                                text = if (current.isUlid() || DiscordAPI.emojiCache.containsKey(current)) {
                                     val cached = extendedEmojiInfo.find { it.id == current }
                                     if (cached?.parent != null) {
                                         when (cached.parent!!.type) {
@@ -312,8 +330,23 @@ fun ReactionInfoSheet(messageId: String, emoji: String, onDismiss: () -> Unit) {
             }
         }
 
-        val reactionsForEmoji =
+        val allReactors =
             reactions?.get(reactionEmoji[selectedReactionIndex]) ?: emptyList()
+        // Ghost ids only carry the server-side count; don't render or fetch
+        // users for them.
+        val reactionsForEmoji =
+            allReactors.filterNot { it.startsWith(DiscordMappings.REACTION_GHOST_PREFIX) }
+        val ghostCount = allReactors.size - reactionsForEmoji.size
+        if (ghostCount > 0) {
+            item("ghost-count") {
+                Text(
+                    text = "+ $ghostCount more",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                )
+            }
+        }
         itemsIndexed(items = reactionsForEmoji) { index, reaction ->
             val isLast = index == reactionsForEmoji.size - 1
             val userOrNull = StoatAPI.userCache[reaction]

@@ -6,11 +6,15 @@ on:
 
 jobs:
   track_issue:
+    # Disabled: inherited from the Revolt upstream. It adds issues to a
+    # `revoltchat` organization board using a `secrets.PAT` secret that does not
+    # exist in this repository, so the job fails on every new issue.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     steps:
       - name: Get project data
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT }}
+          GH_TOKEN: ${{ secrets.PAT }}
         run: |
           gh api graphql -f query='
             query {
@@ -39,7 +43,7 @@ jobs:
 
       - name: Add issue to project
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT }}
+          GH_TOKEN: ${{ secrets.PAT }}
           ISSUE_ID: ${{ github.event.issue.node_id }}
         run: |
           item_id="$( gh api graphql -f query='

@@ -30,6 +30,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import chat.stoat.R
 import chat.stoat.api.realtime.DisconnectionState
+import chat.stoat.discord.DiscordAPI
 import chat.stoat.api.settings.LoadedSettings
 import chat.stoat.ui.theme.Theme
 
@@ -46,6 +47,7 @@ private fun DisconnectedNoticeBase(
     icon: ImageVector,
     text: String,
     canTapToRetry: Boolean = false,
+    detail: String? = null,
     onRetry: () -> Unit = {}
 ) {
     Column {
@@ -77,6 +79,18 @@ private fun DisconnectedNoticeBase(
                     fontWeight = FontWeight.Normal
                 )
             }
+        }
+        // Why the connection is down (close code from the gateway), so
+        // failures are visible without logcat.
+        detail?.takeIf { it.isNotBlank() }?.let {
+            Text(
+                text = it,
+                color = foreground.copy(alpha = 0.8f),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier
+                    .background(background)
+                    .padding(start = 48.dp, bottom = 6.dp)
+            )
         }
     }
 }
@@ -127,7 +141,8 @@ fun DisconnectedNotice(state: DisconnectionState, onReconnect: () -> Unit) {
             background = background,
             foreground = foreground,
             icon = Icons.Default.Refresh,
-            text = stringResource(id = R.string.reconnecting)
+            text = stringResource(id = R.string.reconnecting),
+            detail = DiscordAPI.connectionError
         )
 
         DisconnectionState.Connected -> DisconnectedNoticeBase(

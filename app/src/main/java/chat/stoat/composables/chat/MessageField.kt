@@ -227,13 +227,19 @@ fun MessageField(
 
                     lastWord.startsWith('@') -> {
                         if (channelId != null && serverId != null) {
-                            autocompleteSuggestions.addAll(
-                                Autocomplete.userOrRole(
+                            // userOrRole may hit the REST member-search
+                            // endpoint (the local member cache is sparse on
+                            // the Discord backend), so run it off the main
+                            // thread inside the LaunchedEffect coroutine.
+                            scope.launch {
+                                val suggestions = Autocomplete.userOrRole(
                                     channelId,
                                     serverId,
                                     lastWord.substring(1)
                                 )
-                            )
+                                autocompleteSuggestions.clear()
+                                autocompleteSuggestions.addAll(suggestions)
+                            }
                         }
                     }
 
@@ -304,10 +310,13 @@ fun MessageField(
                                             textFieldState.text
                                                 .substring(0, textFieldState.selection.max)
                                                 .lastWordStartsAt()
+                                        // Discord needs the raw <@id> token
+                                        // (snowflake id); the legacy
+                                        // user#discrim form is not parsed.
                                         replace(
                                             if (lastWordStartsAt == -1) 0 else (lastWordStartsAt + 1),
                                             textFieldState.selection.max,
-                                            "@${item.user.username}#${item.user.discriminator} "
+                                            "<@${item.user.id}> "
                                         )
                                     }
                                 },
@@ -337,10 +346,11 @@ fun MessageField(
                                             textFieldState.text
                                                 .substring(0, textFieldState.selection.max)
                                                 .lastWordStartsAt()
+                                        // Discord role mention token.
                                         replace(
                                             if (lastWordStartsAt == -1) 0 else (lastWordStartsAt + 1),
                                             textFieldState.selection.max,
-                                            "<%${item.id}> "
+                                            "<@&${item.id}> "
                                         )
                                     }
                                 },
@@ -380,16 +390,10 @@ fun MessageField(
                                                 .substring(0, textFieldState.selection.max)
                                                 .lastWordStartsAt()
 
+                                        // Discord always renders the <#id>
+                                        // channel-mention token.
                                         val replacement =
-                                            if (item.channel.name?.contains(
-                                                    " ",
-                                                    ignoreCase = true
-                                                ) == true
-                                            ) {
-                                                "<#${item.channel.id}> "
-                                            } else {
-                                                "#${item.channel.name} "
-                                            }
+                                            "<#${item.channel.id}> "
 
                                         replace(
                                             if (lastWordStartsAt == -1) 0 else (lastWordStartsAt + 1),
@@ -420,10 +424,20 @@ fun MessageField(
                                             textFieldState.text
                                                 .substring(0, textFieldState.selection.max)
                                                 .lastWordStartsAt()
+                                        // Custom-emoji suggestions already
+                                        // carry the full Discord token
+                                        // (<:name:id>); unicode ones insert the
+                                        // emoji character itself, which every
+                                        // client renders.
+                                        val insertText = if (item.custom != null) {
+                                            item.shortcode
+                                        } else {
+                                            item.unicode ?: item.shortcode
+                                        }
                                         replace(
                                             if (lastWordStartsAt == -1) 0 else (lastWordStartsAt + 1),
                                             textFieldState.selection.max,
-                                            item.shortcode + " "
+                                            insertText + " "
                                         )
                                     }
                                 },
@@ -444,8 +458,11 @@ fun MessageField(
                                             style = MaterialTheme.typography.bodyMedium
                                         )
                                     } else {
+                                        // Custom emoji render from the Discord
+                                        // CDN ( gifs for animated ones).
                                         RemoteImage(
-                                            url = "$STOAT_FILES/emojis/${item.custom?.id}",
+                                            url = "https://cdn.discordapp.com/emojis/${item.custom?.id}" +
+                                                    if (item.custom?.animated == true) ".gif" else ".png",
                                             description = null,
                                             contentScale = ContentScale.Fit,
                                             modifier = Modifier

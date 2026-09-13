@@ -1,26 +1,16 @@
 package chat.stoat.api.routes.channel
 
-import chat.stoat.api.StoatHttp
-import chat.stoat.api.api
-import chat.stoat.discord.DiscordAPI
+import android.util.Log
 import chat.stoat.discord.DiscordHttp
 import chat.stoat.discord.routes.reactDiscord
 import chat.stoat.discord.routes.unreactDiscord
-import io.ktor.client.request.delete
-import io.ktor.client.request.put
 
 suspend fun react(channelId: String, messageId: String, emoji: String) {
-    if (DiscordAPI.isActive) {
-        DiscordHttp.reactDiscord(channelId, messageId, emoji)
-    } else {
-        StoatHttp.put("/channels/$channelId/messages/$messageId/reactions/$emoji".api())
-    }
+    Log.d("StoatReact", "react requested: channel=$channelId msg=$messageId emoji=$emoji")
+    DiscordHttp.reactDiscord(channelId, messageId, emoji)
 }
 
 suspend fun unreact(channelId: String, messageId: String, emoji: String) {
-    if (DiscordAPI.isActive) {
-        DiscordHttp.unreactDiscord(channelId, messageId, emoji)
-    } else {
-        StoatHttp.delete("/channels/$channelId/messages/$messageId/reactions/$emoji".api())
-    }
+    Log.d("StoatReact", "unreact requested: channel=$channelId msg=$messageId emoji=$emoji")
+    DiscordHttp.unreactDiscord(channelId, messageId, emoji)
 }

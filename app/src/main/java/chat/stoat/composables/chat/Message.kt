@@ -154,11 +154,8 @@ fun authorName(message: MessageSchema): String {
     if (member == null) {
         // Discord: member objects aren't back-filled into StoatAPI.members,
         // so fall back to the cached user object before "unknown".
-        if (DiscordAPI.isActive) {
-            return StoatAPI.userCache[message.author]?.let { User.resolveDefaultName(it) }
-                ?: stringResource(R.string.unknown)
-        }
-        return stringResource(R.string.unknown)
+        return StoatAPI.userCache[message.author]?.let { User.resolveDefaultName(it) }
+            ?: stringResource(R.string.unknown)
     }
     return member.nickname
         ?: StoatAPI.userCache[message.author]?.let { User.resolveDefaultName(it) }
@@ -618,6 +615,18 @@ fun Message(
                                                 )
                                             }
                                         }
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                    }
+
+                                    "Gif" -> {
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        GifLikeVideo(embed = embed)
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                    }
+
+                                    "Video" -> {
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        VideoAttachmentPlayer(embed = embed)
                                         Spacer(modifier = Modifier.height(2.dp))
                                     }
 

@@ -1,9 +1,6 @@
 package chat.stoat.api.routes.misc
 
-import chat.stoat.api.StoatHttp
-import chat.stoat.api.api
-import io.ktor.client.call.body
-import io.ktor.client.request.get
+import chat.stoat.discord.DISCORD_GATEWAY
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -60,6 +57,23 @@ data class LiveKitNode(
     @SerialName("public_url") val publicUrl: String,
 )
 
+/**
+ * The backend is Discord; the root descriptor is synthesised so screens that
+ * read feature flags (captcha, invite-only, livekit nodes) get sane values.
+ */
 suspend fun getRootRoute(): Root {
-    return StoatHttp.get("/".api()).body()
+    return Root(
+        revolt = "Discord",
+        features = Features(
+            captcha = CAPTCHAFeature(enabled = false, key = ""),
+            email = true,
+            inviteOnly = false,
+            autumn = AutumnJanuaryFeature(enabled = false, url = ""),
+            january = AutumnJanuaryFeature(enabled = false, url = ""),
+            livekit = LiveKitFeature(enabled = false, nodes = emptyList()),
+        ),
+        ws = DISCORD_GATEWAY,
+        app = "https://discord.com",
+        vapid = "",
+    )
 }

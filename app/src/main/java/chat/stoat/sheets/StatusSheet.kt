@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import chat.stoat.R
 import chat.stoat.api.StoatAPI
 import chat.stoat.api.routes.user.patchSelf
+import chat.stoat.core.model.schemas.Status
 import chat.stoat.core.model.schemas.User
 import chat.stoat.composables.generic.SheetButton
 import chat.stoat.composables.generic.asApiName
@@ -188,7 +189,16 @@ fun StatusSheet(onBeforeNavigation: () -> Unit, onGoSettings: () -> Unit) {
             onStatusChange = {
                 onBeforeNavigation()
                 scope.launch {
-                    patchSelf(status = selfUser.status?.copy(presence = it.asApiName()))
+                    // Build the Status fresh instead of selfUser.status?.copy():
+                    // the cached status can be null (e.g. right after a REST
+                    // self-refresh, which carries no presence), and a null
+                    // copy would silently skip the presence update entirely.
+                    patchSelf(
+                        status = Status(
+                            presence = it.asApiName(),
+                            text = selfUser.status?.text,
+                        ),
+                    )
                 }
             }
         )

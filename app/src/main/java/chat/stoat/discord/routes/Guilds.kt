@@ -1,5 +1,8 @@
 package chat.stoat.discord.routes
 
+import chat.stoat.core.discord.models.DiscordMember
+import chat.stoat.core.discord.models.DiscordRole
+
 import android.util.Log
 import chat.stoat.core.discord.models.DiscordChannel
 import chat.stoat.core.discord.models.DiscordGuild
@@ -7,6 +10,7 @@ import chat.stoat.discord.DISCORD_API
 import chat.stoat.discord.DiscordHttp
 import chat.stoat.discord.DiscordJson
 import io.ktor.client.HttpClient
+import io.ktor.client.request.parameter
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import kotlinx.serialization.builtins.ListSerializer
@@ -47,5 +51,88 @@ suspend fun HttpClient.fetchGuildChannels(guildId: String): List<DiscordChannel>
     } catch (e: Exception) {
         Log.w("DiscordRoutes", "fetchGuildChannels($guildId) failed", e)
         emptyList()
+    }
+}
+
+/**
+ * Fetches the full guild object (includes `roles`), `GET /guilds/{id}`.
+ * `with_counts=true` also yields approximate member/presence counts.
+ */
+suspend fun HttpClient.fetchGuild(guildId: String): DiscordGuild? {
+    return try {
+        val response = get("$DISCORD_API/guilds/$guildId") {
+            parameter("with_counts", "true")
+        }
+        DiscordJson.decodeFromString(DiscordGuild.serializer(), response.bodyAsText())
+    } catch (e: Exception) {
+        Log.w("DiscordRoutes", "fetchGuild($guildId) failed", e)
+        null
+    }
+}
+
+/**
+ * Searches a guild's members by username / nickname:
+ * `GET /guilds/{guild.id}/members/search?query=...&limit=...`.
+ * Used by mention autocomplete — the gateway member cache is sparse (only the
+ * subscribed member-list ranges), so server-side search is the reliable way
+ * to resolve `@` queries. Returns member objects carrying their user.
+ */
+suspend fun HttpClient.searchGuildMembers(
+    guildId: String,
+    query: String,
+    limit: Int = 10,
+): List<DiscordMember> {
+    return try {
+        val response = get("$DISCORD_API/guilds/$guildId/members/search") {
+            parameter("query", query)
+            parameter("limit", limit)
+        }
+        val text = response.bodyAsText()
+        if (response.status.value !in 200..299) {
+            Log.w(
+                "DiscordRoutes",
+                "searchGuildMembers($guildId, $query) -> HTTP ${response.status.value}: " +
+                    text.take(200),
+            )
+            return emptyList()
+        }
+        DiscordJson.decodeFromString(
+            ListSerializer(DiscordMember.serializer()),
+            text,
+        )
+    } catch (e: Exception) {
+        Log.w("DiscordRoutes", "searchGuildMembers($guildId, $query) failed", e)
+        emptyList()
+    }
+}
+
+/**
+ * Fetches the guild's roles: `GET /guilds/{id}/roles`.
+ * https://docs.discord.food/resources/guild (role object).
+ */
+suspend fun HttpClient.fetchGuildRoles(guildId: String): List<DiscordRole> {
+    return try {
+        val response = get("$DISCORD_API/guilds/$guildId/roles")
+        DiscordJson.decodeFromString(
+            ListSerializer(DiscordRole.serializer()),
+            response.bodyAsText(),
+        )
+    } catch (e: Exception) {
+        Log.w("DiscordRoutes", "fetchGuildRoles($guildId) failed", e)
+        emptyList()
+    }
+}
+
+/**
+ * Fetches the logged-in user's own member object (with role IDs) for a guild:
+ * `GET /users/@me/guilds/{guild.id}/member`.
+ */
+suspend fun HttpClient.fetchSelfGuildMember(guildId: String): DiscordMember? {
+    return try {
+        val response = get("$DISCORD_API/users/@me/guilds/$guildId/member")
+        DiscordJson.decodeFromString(DiscordMember.serializer(), response.bodyAsText())
+    } catch (e: Exception) {
+        Log.w("DiscordRoutes", "fetchSelfGuildMember($guildId) failed", e)
+        null
     }
 }

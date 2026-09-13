@@ -1,35 +1,36 @@
 package chat.stoat.api.routes.channel
 
 import chat.stoat.api.StoatAPI
-import chat.stoat.api.StoatAPIError
-import chat.stoat.api.StoatHttp
-import chat.stoat.api.StoatJson
-import chat.stoat.discord.DiscordAPI
-import chat.stoat.discord.DiscordHttp
-import chat.stoat.discord.routes.ackChannel
-import chat.stoat.api.api
-import chat.stoat.api.internals.ULID
+import chat.stoat.api.internals.DiscordMappings
 import chat.stoat.core.model.schemas.Channel
 import chat.stoat.core.model.schemas.Message
 import chat.stoat.core.model.schemas.MessagesInChannel
 import chat.stoat.core.model.schemas.User
+import chat.stoat.discord.DISCORD_API
+import chat.stoat.discord.DiscordHttp
+import chat.stoat.discord.DiscordJson
+import chat.stoat.core.discord.models.DiscordMessageReference
+import chat.stoat.discord.routes.DiscordAttachmentRef
+import chat.stoat.discord.routes.DiscordMessageSend
+import chat.stoat.discord.routes.ackChannel
+import chat.stoat.discord.routes.fetchChannelMessages
+import chat.stoat.discord.routes.fetchDiscordMessage
+import chat.stoat.discord.routes.sendMessage
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
-import io.ktor.client.request.header
-import io.ktor.client.request.parameter
 import io.ktor.client.request.patch
 import io.ktor.client.request.post
-import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import io.ktor.client.request.parameter
 import kotlinx.serialization.SerialName
-import kotlinx.serialization.SerializationException
-import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
-import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 suspend fun fetchMessagesFromChannel(
     channelId: String,
@@ -40,34 +41,24 @@ suspend fun fetchMessagesFromChannel(
     nearby: String? = null,
     sort: String? = null
 ): MessagesInChannel {
-    val response = StoatHttp.get("/channels/$channelId/messages".api()) {
-        parameter("limit", limit)
-        parameter("include_users", includeUsers)
+    // `before`/`after` arrive as UI message ids (ULIDs); the backend needs
+    // the original Discord snowflakes.
+    val messages = DiscordHttp.fetchChannelMessages(
+        channelId = channelId,
+        limit = limit,
+        before = before?.let { DiscordMappings.idForRequest(it) },
+        after = after?.let { DiscordMappings.idForRequest(it) },
+    )
 
-        if (before != null) parameter("before", before)
-        if (after != null) parameter("after", after)
-        if (nearby != null) parameter("nearby", nearby)
-        if (sort != null) parameter("sort", sort)
-    }
-        .bodyAsText()
+    val adapted = messages.mapNotNull { DiscordMappings.cacheMessage(it) }
+    val users = messages.mapNotNull { it.author }.mapNotNull { DiscordMappings.adaptUser(it) }
+    users.forEach { u -> u.id?.let { StoatAPI.userCache.putIfAbsent(it, u) } }
 
-    if (includeUsers) {
-        return StoatJson.decodeFromString(
-            MessagesInChannel.serializer(),
-            response
-        )
-    } else {
-        val messages = StoatJson.decodeFromString(
-            ListSerializer(Message.serializer()),
-            response
-        )
-
-        return MessagesInChannel(
-            messages = messages,
-            users = emptyList(),
-            members = emptyList()
-        )
-    }
+    return MessagesInChannel(
+        messages = adapted,
+        users = users.distinctBy { it.id },
+        members = emptyList(),
+    )
 }
 
 @kotlinx.serialization.Serializable
@@ -79,7 +70,7 @@ data class SendMessageReply(
 @kotlinx.serialization.Serializable
 data class SendMessageBody(
     val content: String,
-    val nonce: String = ULID.makeNext(),
+    val nonce: String = "",
     val replies: List<SendMessageReply> = emptyList(),
     val attachments: List<String>?
 )
@@ -99,111 +90,100 @@ data class CreateInviteResponse(
     val channel: String,
 )
 
+@Serializable
+private data class DiscordInviteCreated(
+    val code: String? = null,
+)
+
+/** Sends a message via Discord and returns the new message's UI id. */
 suspend fun sendMessage(
     channelId: String,
     content: String,
-    nonce: String = ULID.makeNext(),
+    nonce: String = "",
     replies: List<SendMessageReply>? = null,
-    attachments: List<String>? = null,
-    idempotencyKey: String = ULID.makeNext()
+    attachments: List<DiscordAttachmentRef>? = null,
+    idempotencyKey: String = ""
 ): String {
-    val response = StoatHttp.post("/channels/$channelId/messages".api()) {
-        contentType(ContentType.Application.Json)
-        setBody(
-            SendMessageBody(
-                content = content,
-                nonce = nonce,
-                replies = replies ?: emptyList(),
-                attachments = attachments
-            )
+    val messageReference = replies?.firstOrNull()?.let {
+        DiscordMessageReference(
+            messageId = DiscordMappings.idForRequest(it.id),
+            channelId = channelId,
         )
-        header("Idempotency-Key", idempotencyKey)
     }
-        .bodyAsText()
-
-    return response
+    val sent = DiscordHttp.sendMessage(
+        channelId,
+        content,
+        messageReference,
+        attachments ?: emptyList(),
+    ) ?: throw Exception("Failed to send message")
+    val adapted = DiscordMappings.cacheMessage(sent)
+    return adapted?.id ?: sent.id ?: ""
 }
 
 suspend fun editMessage(channelId: String, messageId: String, newContent: String? = null) {
-    val response = StoatHttp.patch("/channels/$channelId/messages/$messageId".api()) {
+    val mid = DiscordMappings.idForRequest(messageId)
+    DiscordHttp.patch("$DISCORD_API/channels/$channelId/messages/$mid") {
         contentType(ContentType.Application.Json)
-        setBody(
-            EditMessageBody(
-                content = newContent
-            )
-        )
-    }
-        .bodyAsText()
-
-    try {
-        val error = StoatJson.decodeFromString(StoatAPIError.serializer(), response)
-        throw Error(error.type)
-    } catch (e: SerializationException) {
-        // Not an error
+        setBody(EditMessageBody(content = newContent))
     }
 }
 
 suspend fun deleteMessage(channelId: String, messageId: String) {
-    StoatHttp.delete("/channels/$channelId/messages/$messageId".api())
+    val mid = DiscordMappings.idForRequest(messageId)
+    DiscordHttp.delete("$DISCORD_API/channels/$channelId/messages/$mid")
 }
 
-suspend fun ackChannel(channelId: String, messageId: String = ULID.makeNext()) {
-    if (DiscordAPI.isActive) {
-        // Discord read-state is managed over the gateway; acknowledge best-effort.
-        try {
-            DiscordHttp.ackChannel(channelId, messageId)
-        } catch (_: Exception) {
-            // best-effort; read state is also maintained over the gateway
-        }
-        return
+suspend fun ackChannel(channelId: String, messageId: String = "") {
+    // Discord read-state is managed over the gateway; acknowledge best-effort.
+    try {
+        val mid = if (messageId.isBlank()) null else DiscordMappings.idForRequest(messageId)
+        DiscordHttp.ackChannel(channelId, mid ?: DiscordMappings.idForRequest(messageId))
+    } catch (_: Exception) {
+        // best-effort; read state is also maintained over the gateway
     }
-    StoatHttp.put("/channels/$channelId/ack/$messageId".api())
 }
 
 suspend fun fetchSingleChannel(channelId: String): Channel {
-    val response = StoatHttp.get("/channels/$channelId".api())
-        .bodyAsText()
-
-    return StoatJson.decodeFromString(
-        Channel.serializer(),
-        response
+    val response = DiscordHttp.get("$DISCORD_API/channels/$channelId").bodyAsText()
+    val channel = DiscordJson.decodeFromString(
+        chat.stoat.core.discord.models.DiscordChannel.serializer(),
+        response,
     )
+    val adapted = DiscordMappings.adaptChannel(channel)
+    adapted.id?.let { StoatAPI.channelCache[it] = adapted }
+    return adapted
 }
 
 suspend fun fetchGroupParticipants(channelId: String): List<User> {
-    val response = StoatHttp.get("/channels/$channelId/members".api())
-        .bodyAsText()
-
-    return StoatJson.decodeFromString(
-        ListSerializer(User.serializer()),
-        response
+    val response = DiscordHttp.get("$DISCORD_API/channels/$channelId").bodyAsText()
+    val channel = DiscordJson.decodeFromString(
+        chat.stoat.core.discord.models.DiscordChannel.serializer(),
+        response,
     )
+    return channel.recipients?.mapNotNull { DiscordMappings.adaptUser(it) } ?: emptyList()
 }
 
 suspend fun createInvite(channelId: String): CreateInviteResponse {
-    val response = StoatHttp.post("/channels/$channelId/invites".api())
-        .bodyAsText()
-
-    val error = StoatJson.decodeFromString(StoatAPIError.serializer(), response)
-    if (error.type != "Server") throw Error(error.type)
-
-    return StoatJson.decodeFromString(CreateInviteResponse.serializer(), response)
-}
-
-suspend fun fetchSingleMessage(channelId: String, messageId: String): Message {
-    val response = StoatHttp.get("/channels/$channelId/messages/$messageId".api())
-        .bodyAsText()
-
-    return StoatJson.decodeFromString(
-        Message.serializer(),
-        response
+    val response = DiscordHttp.post("$DISCORD_API/channels/$channelId/invites").bodyAsText()
+    val invite = DiscordJson.decodeFromString(DiscordInviteCreated.serializer(), response)
+    return CreateInviteResponse(
+        type = "Server",
+        id = invite.code ?: "",
+        server = StoatAPI.channelCache[channelId]?.server ?: "",
+        creator = StoatAPI.selfId ?: "",
+        channel = channelId,
     )
 }
 
+suspend fun fetchSingleMessage(channelId: String, messageId: String): Message {
+    val mid = DiscordMappings.idForRequest(messageId)
+    val message = DiscordHttp.fetchDiscordMessage(channelId, mid)
+        ?: throw Exception("Message not found")
+    return DiscordMappings.cacheMessage(message) ?: throw Exception("Message not found")
+}
+
 suspend fun leaveDeleteOrCloseChannel(channelId: String, leaveSilently: Boolean = false) {
-    StoatHttp.delete("/channels/$channelId".api()) {
-        parameter("leave_silently", leaveSilently)
-    }
+    DiscordHttp.delete("$DISCORD_API/channels/$channelId")
 }
 
 suspend fun patchChannel(
@@ -216,58 +196,31 @@ suspend fun patchChannel(
     nsfw: Boolean? = null,
     pure: Boolean = false
 ) {
-    val body = mutableMapOf<String, JsonElement>()
+    val body = mutableMapOf<String, String>()
+    if (name != null) body["name"] = name
+    if (description != null) body["topic"] = description
+    if (nsfw != null) body["nsfw"] = nsfw.toString()
 
-    if (name != null) {
-        body["name"] = StoatJson.encodeToJsonElement(String.serializer(), name)
-    }
-
-    if (description != null) {
-        body["description"] = StoatJson.encodeToJsonElement(String.serializer(), description)
-    }
-
-    if (icon != null) {
-        body["icon"] = StoatJson.encodeToJsonElement(String.serializer(), icon)
-    }
-
-    if (banner != null) {
-        body["banner"] = StoatJson.encodeToJsonElement(String.serializer(), banner)
-    }
-
-    if (remove != null) {
-        body["remove"] = StoatJson.encodeToJsonElement(ListSerializer(String.serializer()), remove)
-    }
-
-    if (nsfw != null) {
-        body["nsfw"] = StoatJson.encodeToJsonElement(Boolean.serializer(), nsfw)
-    }
-
-    val response = StoatHttp.patch("/channels/$channelId".api()) {
-        contentType(ContentType.Application.Json)
-        setBody(
-            StoatJson.encodeToString(
-                MapSerializer(
-                    String.serializer(),
-                    JsonElement.serializer()
-                ),
-                body
+    if (body.isNotEmpty()) {
+        DiscordHttp.patch("$DISCORD_API/channels/$channelId") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                DiscordJson.encodeToString(
+                    MapSerializer(String.serializer(), String.serializer()),
+                    body,
+                )
             )
-        )
+        }
     }
-        .bodyAsText()
-
-    try {
-        val error = StoatJson.decodeFromString(StoatAPIError.serializer(), response)
-        throw Exception(error.type)
-    } catch (e: SerializationException) {
-        // Not an error
-    }
-
     if (!pure) {
-        val channel = StoatJson.decodeFromString(Channel.serializer(), response)
-        StoatAPI.channelCache[channelId] = channel
+        runCatching { fetchSingleChannel(channelId) }
     }
 }
+
+@Serializable
+private data class DiscordSearchResponse(
+    val messages: List<List<chat.stoat.core.discord.models.DiscordMessage>>? = null,
+)
 
 suspend fun searchChannel(
     channelId: String,
@@ -279,72 +232,27 @@ suspend fun searchChannel(
     limit: Int? = null,
     sort: String? = null
 ): MessagesInChannel {
-    check(
-        sort == null || sort in listOf(
-            "Relevance",
-            "Latest",
-            "Oldest"
-        )
-    ) { "Sort must be one of Relevance, Latest, Oldest; failing that null" }
-    check(limit == null || (limit in 1..100)) { "Limit must be between 1 and 100; failing that null" }
-    check(query == null || pinned == null) { "One of query or pinned must be null" }
-    check(
-        pinned != null || (!query.isNullOrBlank() && query.length <= 64)
-    ) { "Query must not be null when pinned is not null; Query must not be blank when pinned is not null; Query must be less than 65 characters when pinned is not null" }
-
-    val body = mutableMapOf<String, JsonElement>()
-
-    if (query != null) {
-        body["query"] = StoatJson.encodeToJsonElement(String.serializer(), query)
-    }
-    if (pinned != null) {
-        body["pinned"] = StoatJson.encodeToJsonElement(Boolean.serializer(), pinned)
-    }
-    if (includeUsers != null) {
-        body["include_users"] = StoatJson.encodeToJsonElement(Boolean.serializer(), includeUsers)
-    }
-    if (after != null) {
-        body["after"] = StoatJson.encodeToJsonElement(String.serializer(), after)
-    }
-    if (before != null) {
-        body["before"] = StoatJson.encodeToJsonElement(String.serializer(), before)
-    }
-    if (limit != null) {
-        body["limit"] = StoatJson.encodeToJsonElement(Int.serializer(), limit)
-    }
-    if (sort != null) {
-        body["sort"] = StoatJson.encodeToJsonElement(String.serializer(), sort)
+    // Discord user-account search: GET /channels/{id}/messages/search.
+    // Pinned-only search is not supported.
+    if (pinned == true || query.isNullOrBlank()) {
+        return MessagesInChannel(messages = emptyList(), users = emptyList(), members = emptyList())
     }
 
-    val response = StoatHttp.post("/channels/$channelId/search".api()) {
-        contentType(ContentType.Application.Json)
-        setBody(
-            StoatJson.encodeToString(
-                MapSerializer(
-                    String.serializer(),
-                    JsonElement.serializer()
-                ),
-                body
-            )
+    return try {
+        val response = DiscordHttp.get("$DISCORD_API/channels/$channelId/messages/search") {
+            parameter("content", query)
+        }.bodyAsText()
+        val search = DiscordJson.decodeFromString(DiscordSearchResponse.serializer(), response)
+        val messages = search.messages.orEmpty().flatten()
+        val adapted = messages.mapNotNull { DiscordMappings.cacheMessage(it) }
+        val users = messages.mapNotNull { it.author }.mapNotNull { DiscordMappings.adaptUser(it) }
+        users.forEach { u -> u.id?.let { StoatAPI.userCache.putIfAbsent(it, u) } }
+        MessagesInChannel(
+            messages = adapted,
+            users = users.distinctBy { it.id },
+            members = emptyList(),
         )
-    }
-        .bodyAsText()
-
-    if (includeUsers == true) {
-        return StoatJson.decodeFromString(
-            MessagesInChannel.serializer(),
-            response
-        )
-    } else {
-        val messages = StoatJson.decodeFromString(
-            ListSerializer(Message.serializer()),
-            response
-        )
-
-        return MessagesInChannel(
-            messages = messages,
-            users = emptyList(),
-            members = emptyList()
-        )
+    } catch (e: Exception) {
+        MessagesInChannel(messages = emptyList(), users = emptyList(), members = emptyList())
     }
 }

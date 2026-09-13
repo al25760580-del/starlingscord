@@ -73,10 +73,6 @@ import chat.stoat.BuildConfig
 import chat.stoat.R
 import chat.stoat.api.HitRateLimitException
 import chat.stoat.api.StoatAPI
-import chat.stoat.api.StoatHttp
-import chat.stoat.api.api
-import chat.stoat.api.routes.microservices.geo.queryGeo
-import chat.stoat.api.routes.microservices.health.healthCheck
 import chat.stoat.api.routes.onboard.needsOnboarding
 import chat.stoat.api.settings.Experiments
 import chat.stoat.api.settings.GeoStateProvider
@@ -107,11 +103,8 @@ import chat.stoat.screens.labs.LabsRootScreen
 import chat.stoat.screens.login.LoginGreetingScreen
 import chat.stoat.screens.login.LoginScreen
 import chat.stoat.screens.login.MfaScreen
-import chat.stoat.discord.screens.DiscordChannelScreen
-import chat.stoat.discord.screens.DiscordGuildScreen
-import chat.stoat.discord.screens.DiscordHomeScreen
-import chat.stoat.discord.screens.DiscordLoginScreen
-import chat.stoat.discord.DiscordAPI
+import chat.stoat.discord.DISCORD_API
+import chat.stoat.discord.DiscordHttp
 import chat.stoat.screens.login2.InitScreen
 import chat.stoat.screens.main.MainScreen
 import chat.stoat.screens.register.OnboardingScreen
@@ -167,12 +160,12 @@ class MainActivityViewModel(
         }
     }
 
-    private suspend fun canReachStoat(): Boolean {
-        try {
-            val res = StoatHttp.get("/".api())
-            return res.status.value == 200
+    private suspend fun canReachBackend(): Boolean {
+        return try {
+            val res = DiscordHttp.get("$DISCORD_API/gateway")
+            res.status.value in 200..499
         } catch (e: Exception) {
-            return false
+            false
         }
     }
 
@@ -190,24 +183,6 @@ class MainActivityViewModel(
         viewModelScope.launch {
             Log.d("MainActivity", "Hydrating Experiments from KV")
             Experiments.hydrateWithKv()
-            // Discord owns its own infra; skip the Revolt health/geo probes.
-            if (kvStorage.get("auth_backend") == "discord" || DiscordAPI.isActive) {
-                Log.d("MainActivity", "Discord backend active; skipping Revolt health/geo probes")
-                return@launch
-            }
-            Log.d("MainActivity", "Performing health check")
-            doHealthCheck()
-            Log.d("MainActivity", "Performing update geo state")
-            updateGeoState()
-        }
-    }
-
-    private suspend fun updateGeoState() {
-        try {
-            Log.d("MainActivity", "Querying geo state")
-            GeoStateProvider.updateGeoState(queryGeo())
-        } catch (e: Exception) {
-            Log.e("MainActivity", "Failed to query geo state", e)
         }
     }
 
@@ -221,21 +196,6 @@ class MainActivityViewModel(
 
             if (!isConnected.value) return@launch startWithoutDestination()
 
-            // If a Discord session was persisted, boot straight into Discord (full_backend).
-            if (kvStorage.get("auth_backend") == "discord") {
-                val discordToken = kvStorage.get("discord_session_token")
-                if (!discordToken.isNullOrBlank()) {
-                    try {
-                        Log.d("MainActivity", "Discord session persisted; auto-logging in via Discord")
-                        DiscordAPI.loginAs(discordToken)
-                        startWithDestination("chat")
-                        return@launch
-                    } catch (e: Exception) {
-                        Log.e("MainActivity", "Discord auto-login failed; falling back to Revolt", e)
-                    }
-                }
-            }
-
             Log.d("MainActivity", "We can reach Stoat, checking if we're logged in")
 
             val token = kvStorage.get("sessionToken")
@@ -247,14 +207,14 @@ class MainActivityViewModel(
                 "We have a session token, checking if it's valid and if we can still reach Stoat"
             )
 
-            val canReachStoat = canReachStoat()
+            val canReachBackend = canReachBackend()
             val valid = try {
                 StoatAPI.checkSessionToken(token)
             } catch (e: Throwable) {
                 false
             }
 
-            if (canReachStoat && !valid) {
+            if (canReachBackend && !valid) {
                 Log.d("MainActivity", "Session token is invalid, could not log in")
                 couldNotLogIn.emit(true)
             } else {
@@ -298,11 +258,15 @@ class MainActivityViewModel(
 
     fun logOut() {
         viewModelScope.launch {
+            StoatAPI.logout()
             kvStorage.remove("sessionToken")
             kvStorage.remove("sessionId")
             kvStorage.remove("selfId")
             kvStorage.remove("selfName")
             kvStorage.remove("selfAvatarUrl")
+            // Clean up keys used by the previous dual-backend builds.
+            kvStorage.remove("auth_backend")
+            kvStorage.remove("discord_session_token")
             startWithDestination("login/greeting")
         }
     }
@@ -316,20 +280,6 @@ class MainActivityViewModel(
 
     val activeAlert = MutableStateFlow<HealthNotice?>(null)
     val isAlertActive = MutableStateFlow(false)
-
-    private fun doHealthCheck() {
-        viewModelScope.launch {
-            try {
-                val health = healthCheck()
-                if (health.alert != null) {
-                    activeAlert.emit(health)
-                    isAlertActive.emit(true)
-                }
-            } catch (e: Exception) {
-                Log.e("MainActivity", "Failed to perform health check", e)
-            }
-        }
-    }
 
     fun onDismissHealthAlert() {
         viewModelScope.launch {
@@ -395,9 +345,22 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        SentryAndroid.init(this) { options ->
-            options.dsn = BuildConfig.SENTRY_DSN
-            options.release = BuildConfig.VERSION_NAME
+        // Crash reporting is OPTIONAL: a missing/invalid DSN (e.g. builds
+        // without stoatbuild.properties bake "" or the literal "null") must
+        // never take the app down at startup - it did exactly that with
+        // "Invalid DSN scheme: null" (IllegalArgumentException inside
+        // SentryAndroid.init). Only initialize when a plausible http(s) DSN
+        // is present, and guard the whole init regardless.
+        runCatching {
+            val dsn = BuildConfig.SENTRY_DSN
+            if (!dsn.isNullOrBlank() && dsn != "null" && dsn.startsWith("http")) {
+                SentryAndroid.init(this) { options ->
+                    options.dsn = dsn
+                    options.release = BuildConfig.VERSION_NAME
+                }
+            }
+        }.onFailure {
+            android.util.Log.w("MainActivity", "Sentry init skipped/failed (non-fatal)", it)
         }
 
         @Suppress("DEPRECATION") // We are fixing a bug in the splash screen
@@ -630,17 +593,6 @@ fun AppEntrypoint(
                             backStackEntry.arguments?.getString("allowedAuthTypes") ?: ""
 
                         MfaScreen(navController, allowedAuthTypes, mfaTicket)
-                    }
-
-                    composable("discord/login") { DiscordLoginScreen(navController) }
-                    composable("discord/home") { DiscordHomeScreen(navController) }
-                    composable("discord/guild/{guildId}") { backStackEntry ->
-                        val guildId = backStackEntry.arguments?.getString("guildId") ?: ""
-                        DiscordGuildScreen(navController, guildId)
-                    }
-                    composable("discord/channel/{channelId}") { backStackEntry ->
-                        val channelId = backStackEntry.arguments?.getString("channelId") ?: ""
-                        DiscordChannelScreen(navController, channelId)
                     }
 
                     composable("register/greeting") { RegisterGreetingScreen(navController) }

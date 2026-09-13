@@ -3,24 +3,25 @@ package chat.stoat.discord
 import android.os.Build
 import android.util.Base64
 import android.util.Log
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import chat.stoat.BuildConfig
-import chat.stoat.StoatApplication
-import chat.stoat.api.StoatAPI
-import chat.stoat.persistence.KVStorage
 import chat.stoat.core.discord.models.DiscordChannel
+import chat.stoat.core.discord.models.DiscordRole
+import chat.stoat.core.discord.models.DiscordMember
 import chat.stoat.core.discord.models.DiscordGuild
 import chat.stoat.core.discord.models.DiscordGuildEmoji
 import chat.stoat.core.discord.models.DiscordMessage
 import chat.stoat.core.discord.models.DiscordUser
-import chat.stoat.discord.DiscordToStoat
-import chat.stoat.discord.realtime.DiscordGateway
-import chat.stoat.discord.routes.fetchCurrentUser
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.DefaultRequest
 import io.ktor.client.plugins.HttpRequestRetry
+import io.ktor.client.plugins.HttpRequestTimeoutException
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.logging.LogLevel
@@ -28,12 +29,6 @@ import io.ktor.client.plugins.logging.Logging
 import io.ktor.client.request.header
 import io.ktor.client.request.url
 import io.ktor.serialization.kotlinx.json.json
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 
@@ -41,6 +36,12 @@ import kotlinx.serialization.json.Json
 const val DISCORD_API = "https://discord.com/api/v9"
 
 /** Gateway URL (JSON encoding, gateway protocol v10). */
+/**
+ * Fallback gateway URL; the real one is fetched at runtime via
+ * GET /gateway (what the official client does - the docs prescribe fetching
+ * and caching the WebSocket URL instead of hardcoding it, and old versions
+ * like v=9 get rejected with close code 4012).
+ */
 const val DISCORD_GATEWAY = "wss://gateway.discord.gg/?v=10&encoding=json"
 
 /** Authorization header name used by the Discord API. */
@@ -53,20 +54,27 @@ val DiscordJson = Json {
 }
 
 /**
- * Encodes the standard client "super properties" that Discord expects on every
- * request. Mirrors what the official client sends (base64-encoded JSON).
+ * Encodes the "super properties" Discord expects on every request, matching
+ * the official Android client's shape
+ * (https://docs.discord.food/reference#client-properties). A non-standard
+ * browser/device string or a missing client_build_number is one of the
+ * signals Discord uses to flag automated ("self-bot") accounts.
  */
+private val clientLaunchId: String = java.util.UUID.randomUUID().toString()
+private val heartbeatSessionId: String = java.util.UUID.randomUUID().toString()
+private val launchSignature: String = System.nanoTime().toString()
+private val deviceVendorId: String = java.util.UUID.randomUUID().toString()
+
 private fun buildSuperProperties(): String {
-    val json = """{"os":"Android","browser":"Stoat","device":"Stoat","system_locale":"en-US","release_channel":"googleplay","client_version":"${BuildConfig.VERSION_NAME}","os_version":"${Build.VERSION.RELEASE}","os_arch":"arm","app_arch":"arm","platform":"Android"}"""
+    val json = """{"os":"Android","browser":"Discord Android","device":"${Build.MODEL}","system_locale":"${java.util.Locale.getDefault().toLanguageTag()}","has_client_mods":false,"client_version":"280.2 - rn","release_channel":"googleplay","device_vendor_id":"$deviceVendorId","design_id":2,"browser_user_agent":"","browser_version":"","os_version":"${Build.VERSION.SDK_INT}","client_build_number":4025,"client_event_source":null,"client_launch_id":"$clientLaunchId","launch_signature":"$launchSignature","client_heartbeat_session_id":"$heartbeatSessionId"}"""
     return Base64.encodeToString(json.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
 }
 
 /**
- * Ktor HTTP client for Discord, mirroring the structure of [chat.stoat.api.StoatHttp].
+ * Ktor HTTP client for the Discord backend (the app's only HTTP client).
  *
- * The [DISCORD_TOKEN_HEADER] and [chat.stoat.discord.DiscordAPI.fingerprint] headers are
- * injected on every request via an OkHttp interceptor, in the same way StoatAPI
- * injects its session token.
+ * The [DISCORD_TOKEN_HEADER] and [DiscordAPI.fingerprint] headers are
+ * injected on every request via an OkHttp interceptor.
  */
 val DiscordHttp = HttpClient(OkHttp) {
     install(DefaultRequest)
@@ -74,14 +82,31 @@ val DiscordHttp = HttpClient(OkHttp) {
     install(WebSockets)
     install(HttpRequestRetry) {
         retryOnServerErrors(maxRetries = 3)
+        // A timed-out request (server holding the connection - seen live on
+        // freshly-flagged accounts) gets a couple of retries before failing.
+        retryOnExceptionIf(maxRetries = 2) { _, cause ->
+            cause is HttpRequestTimeoutException
+        }
         exponentialDelay()
+    }
+    // Hard bound on every REST call. Without this, a request the server
+    // holds forever (observed on an account right after Discord flags the
+    // "new login detected" security flow) leaves the app hung on the login
+    // screen with zero diagnostics - the login coroutine never returns.
+    // WebSockets opt out per-request (see DiscordGateway.connect).
+    install(HttpTimeout) {
+        connectTimeoutMillis = 10_000
+        requestTimeoutMillis = 20_000
     }
     install(Logging) { level = LogLevel.INFO }
 
     engine {
         addInterceptor { chain ->
             val request = with(chain.request().newBuilder()) {
-                header("User-Agent", "StoatForAndroid/${BuildConfig.VERSION_NAME} Discord")
+                // The official Android client's User-Agent; a custom one is a
+                // self-bot signal. 280202 = client_version 280.2, RNA = React
+                // Native Android.
+                header("User-Agent", "Discord-Android/280202;RNA")
                 header("X-Super-Properties", buildSuperProperties())
                 DiscordAPI.fingerprint?.let { header("X-Fingerprint", it) }
                 if (DiscordAPI.sessionToken.isNotBlank()) {
@@ -99,8 +124,10 @@ val DiscordHttp = HttpClient(OkHttp) {
 }
 
 /**
- * Singleton holding the Discord session state, in-memory caches and entry points,
- * mirroring [chat.stoat.api.StoatAPI].
+ * Discord session state and backend-native caches.
+ *
+ * Session lifecycle lives in [chat.stoat.api.StoatAPI] (loginAs / logout);
+ * realtime lives in [chat.stoat.api.realtime.DiscordGateway].
  */
 object DiscordAPI {
     var sessionToken: String = ""
@@ -113,23 +140,20 @@ object DiscordAPI {
     var selfId: String? = null
         internal set
 
-    /** When true, Discord is the active backend feeding [StoatAPI] (full_backend mode). */
-    var isActive = false
-
     /** True once the gateway READY has been received and we are live. */
     var connected = false
 
     /** Last connection error, surfaced for diagnostics / UI. */
-    var connectionError: String? = null
+    /** Last gateway close reason; surfaced in the reconnect banner so
+     *  failures are visible without logcat. */
+    var connectionError: String? by mutableStateOf<String?>(null)
 
     /**
-     * Maps a Revolt-shaped ULID (used as [chat.stoat.core.model.schemas.Message].id)
-     * back to the original Discord snowflake, so actions that need the real id
-     * (delete / edit / react) can be round-tripped.
+     * Maps a UI message id (ULID derived from the snowflake timestamp) back to
+     * the original Discord snowflake, so actions that need the real id
+     * (delete / edit / react / reply) can be round-tripped.
      */
     val idMap = mutableMapOf<String, String>()
-
-    private var socketJob: Job? = null
 
     val userCache = mutableStateMapOf<String, DiscordUser>()
     val guildCache = mutableStateMapOf<String, DiscordGuild>()
@@ -140,6 +164,18 @@ object DiscordAPI {
     val emojiCache = mutableStateMapOf<String, DiscordGuildEmoji>()
     val dmCache = mutableStateMapOf<String, DiscordChannel>()
 
+    /** Guild roles by role ID (snowflakes are globally unique). */
+    val roleCache = mutableStateMapOf<String, DiscordRole>()
+
+    /** Base permissions for the logged-in user per guild (from /users/@me/guilds). */
+    val guildPermissions = mutableMapOf<String, Long>()
+
+    /** The logged-in user's own guild member object (carrying role IDs) per guild. */
+    val selfMembers = mutableStateMapOf<String, DiscordMember>()
+
+    /** The logged-in user's premium type (0 none, 1 Classic, 2 Nitro, 3 Basic). */
+    var selfPremiumType: Int? = null
+
     fun setSessionToken(token: String) {
         sessionToken = token
     }
@@ -148,79 +184,12 @@ object DiscordAPI {
         fingerprint = fp
     }
 
-    fun isLoggedIn(): Boolean = selfId != null
-
-    /** Completes login using an already-acquired token, then opens the gateway. */
-    suspend fun loginAs(token: String) {
-        setSessionToken(token)
-
-        // Persist so a cold start can boot straight into Discord (full_backend mode).
-        try {
-            KVStorage(StoatApplication.instance).set("auth_backend", "discord")
-            KVStorage(StoatApplication.instance).set("discord_session_token", token)
-        } catch (e: Exception) {
-            Log.w("DiscordAPI", "Failed to persist Discord session", e)
-        }
-
-        // Reset any stale Revolt session state so Discord owns the UI caches.
-        StoatAPI.userCache.clear()
-        StoatAPI.serverCache.clear()
-        StoatAPI.channelCache.clear()
-        StoatAPI.messageCache.clear()
-        StoatAPI.emojiCache.clear()
-        StoatAPI.voiceStateCache.clear()
-        StoatAPI.userSlowmodeCache.clear()
-        StoatAPI.members.clear()
-        StoatAPI.selfId = null
-
-        val self = DiscordHttp.fetchCurrentUser()
-        selfId = self?.id
-        // Set synchronously so Stoat's chat screen (which treats a null selfId as
-        // "logged out") does not bounce back to the login route before the
-        // gateway READY event arrives.
-        StoatAPI.selfId = self?.id
-        self?.let { s -> s.id?.let { id -> DiscordToStoat.adaptUser(s)?.let { u -> StoatAPI.userCache[id] = u } } }
-        isActive = true
-        // Seed servers / DMs / channels from REST immediately so the home screen
-        // is populated even before (or without) the gateway delivering READY.
-        DiscordToStoat.populateFromRest()
-        startSocketOps()
-    }
-
-    private fun startSocketOps() {
-        socketJob?.cancel()
-        socketJob = CoroutineScope(Dispatchers.IO).launch {
-            var reconnectDelay = 1000L
-            while (isActive) {
-                try {
-                    DiscordGateway.connect(sessionToken)
-                    Log.i("DiscordAPI", "Gateway connection closed; reconnecting if still active")
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    connectionError = e.message ?: e.javaClass.simpleName
-                    Log.e("DiscordAPI", "Gateway error: $connectionError", e)
-                }
-                if (!isActive) break
-                delay(reconnectDelay)
-                reconnectDelay = (reconnectDelay * 2).coerceAtMost(30_000)
-            }
-        }
-    }
-
-    fun logout() {
-        socketJob?.cancel()
-        socketJob = null
-        // Clear the persisted Discord session so a cold start does not retry Discord.
-        CoroutineScope(Dispatchers.IO).launch {
-            runCatching { KVStorage(StoatApplication.instance).remove("auth_backend") }
-            runCatching { KVStorage(StoatApplication.instance).remove("discord_session_token") }
-        }
+    /** Clears all session state; called from [chat.stoat.api.StoatAPI.logout]. */
+    fun reset() {
         sessionToken = ""
         sessionId = ""
         selfId = null
         fingerprint = null
-        isActive = false
         connected = false
         connectionError = null
         idMap.clear()
@@ -230,12 +199,9 @@ object DiscordAPI {
         messageCache.clear()
         emojiCache.clear()
         dmCache.clear()
-        // Clear the Stoat UI caches we populated so the UI returns to a clean state.
-        StoatAPI.userCache.clear()
-        StoatAPI.serverCache.clear()
-        StoatAPI.channelCache.clear()
-        StoatAPI.messageCache.clear()
-        StoatAPI.members.clear()
-        StoatAPI.selfId = null
+        roleCache.clear()
+        guildPermissions.clear()
+        selfMembers.clear()
+        selfPremiumType = null
     }
 }

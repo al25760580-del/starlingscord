@@ -76,10 +76,17 @@ class MemberListSheetViewModel(
 
     fun fetchServerMemberList(serverId: String, channelId: String) {
         viewModelScope.launch {
-            val memberList = fetchMembers(
-                serverId = serverId,
-                includeOffline = serverId !in DO_NOT_FETCH_OFFLINE_MEMBERS_SERVERS
-            ).members
+            val memberList = try {
+                fetchMembers(
+                    serverId = serverId,
+                    includeOffline = serverId !in DO_NOT_FETCH_OFFLINE_MEMBERS_SERVERS
+                ).members
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("MemberListSheet", "Failed to fetch member list for $serverId", e)
+                emptyList()
+            }
             val channel = StoatAPI.channelCache[channelId] ?: return@launch
 
             val categories = mutableMapOf<String, List<Member>>()

@@ -35,6 +35,8 @@ data class GatewayReady(
     val privateChannels: List<DiscordChannel>? = null,
     @SerialName("session_id")
     val sessionId: String? = null,
+    @SerialName("resume_gateway_url")
+    val resumeGatewayUrl: String? = null,
     val application: GatewayApplication? = null,
 )
 
@@ -78,15 +80,16 @@ data class ClientState(
 @Serializable
 data class IdentifyProperties(
     @SerialName("\$os")
-    val os: String = "android",
+    val os: String = "Android",
     @SerialName("\$browser")
-    val browser: String = "Stoat",
+    val browser: String = "Discord Android",
     @SerialName("\$device")
-    val device: String = "Stoat",
+    val device: String = "",
+    // Web-only fields; omitted (null) on mobile clients.
     @SerialName("\$referrer")
-    val referrer: String = "",
+    val referrer: String? = null,
     @SerialName("\$referring_domain")
-    val referringDomain: String = "",
+    val referringDomain: String? = null,
 )
 
 @Serializable

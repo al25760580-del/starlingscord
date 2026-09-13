@@ -1,9 +1,7 @@
 package chat.stoat.api.routes.account
 
-import chat.stoat.api.StoatHttp
-import chat.stoat.api.StoatJson
-import chat.stoat.api.api
-import io.ktor.client.request.get
+import chat.stoat.discord.DiscordHttp
+import chat.stoat.discord.routes.fetchCurrentUser
 import io.ktor.client.statement.bodyAsText
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -14,11 +12,19 @@ data class AccountResponse(
     val email: String,
 )
 
-suspend fun fetchAccount(): AccountResponse {
-    val response = StoatHttp.get("/auth/account".api())
-        .bodyAsText()
+@Serializable
+private data class DiscordSelfResponse(
+    val id: String? = null,
+    val email: String? = null,
+)
 
-    return StoatJson.decodeFromString(response)
+/** Fetches the account email via Discord's `GET /users/@me`. */
+suspend fun fetchAccount(): AccountResponse {
+    val user = DiscordHttp.fetchCurrentUser()
+    return AccountResponse(
+        id = user?.id ?: "",
+        email = user?.email ?: ""
+    )
 }
 
 @Serializable
@@ -31,9 +37,16 @@ data class MfaSettings(
     @SerialName("recovery_active") val recoveryActive: Boolean? = null,
 )
 
+/** Derives MFA settings from Discord's `mfa_enabled` on the self user. */
 suspend fun fetchMfaSettings(): MfaSettings {
-    val response = StoatHttp.get("/auth/mfa".api())
-        .bodyAsText()
-
-    return StoatJson.decodeFromString(response)
+    val user = DiscordHttp.fetchCurrentUser()
+    val totp = user?.mfaEnabled ?: false
+    return MfaSettings(
+        emailOtp = false,
+        trustedHandover = false,
+        emailMfa = false,
+        totpMfa = totp,
+        securityKeyMfa = false,
+        recoveryActive = totp,
+    )
 }

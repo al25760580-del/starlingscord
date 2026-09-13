@@ -1,52 +1,19 @@
 package chat.stoat.api.routes.safety
 
-import chat.stoat.api.StoatAPIError
-import chat.stoat.api.StoatHttp
-import chat.stoat.api.StoatJson
+import android.util.Log
 import chat.stoat.core.model.schemas.ContentReportReason
-import chat.stoat.core.model.schemas.FullMessageReport
-import chat.stoat.core.model.schemas.FullServerReport
-import chat.stoat.core.model.schemas.FullUserReport
-import chat.stoat.core.model.schemas.MessageReport
-import chat.stoat.core.model.schemas.ServerReport
-import chat.stoat.core.model.schemas.UserReport
 import chat.stoat.core.model.schemas.UserReportReason
-import chat.stoat.api.api
-import io.ktor.client.request.post
-import io.ktor.client.request.setBody
-import io.ktor.client.statement.bodyAsText
-import kotlinx.serialization.SerializationException
 
+/**
+ * Content reporting against Discord's user API is not wired up yet; reports
+ * are accepted by the UI and logged best-effort.
+ */
 suspend fun putMessageReport(
     messageId: String,
     reason: ContentReportReason,
     additionalContext: String? = null
 ) {
-    val fullMessageReport = FullMessageReport(
-        content = MessageReport(
-            type = "Message",
-            report_reason = reason,
-            id = messageId
-        ),
-        additional_context = additionalContext
-    )
-
-    val response = StoatHttp.post("/safety/report".api()) {
-        setBody(
-            StoatJson.encodeToString(
-                FullMessageReport.serializer(),
-                fullMessageReport
-            )
-        )
-    }
-        .bodyAsText()
-
-    try {
-        val error = StoatJson.decodeFromString(StoatAPIError.serializer(), response)
-        throw Error(error.type)
-    } catch (e: SerializationException) {
-        // Not an error
-    }
+    Log.w("Safety", "Message report not supported on Discord yet: $messageId ($reason)")
 }
 
 suspend fun putServerReport(
@@ -54,31 +21,7 @@ suspend fun putServerReport(
     reason: ContentReportReason,
     additionalContext: String? = null
 ) {
-    val fullServerReport = FullServerReport(
-        content = ServerReport(
-            type = "Server",
-            report_reason = reason,
-            id = serverId
-        ),
-        additional_context = additionalContext
-    )
-
-    val response = StoatHttp.post("/safety/report".api()) {
-        setBody(
-            StoatJson.encodeToString(
-                FullServerReport.serializer(),
-                fullServerReport
-            )
-        )
-    }
-        .bodyAsText()
-
-    try {
-        val error = StoatJson.decodeFromString(StoatAPIError.serializer(), response)
-        throw Error(error.type)
-    } catch (e: SerializationException) {
-        // Not an error
-    }
+    Log.w("Safety", "Server report not supported on Discord yet: $serverId ($reason)")
 }
 
 suspend fun putUserReport(
@@ -86,29 +29,5 @@ suspend fun putUserReport(
     reason: UserReportReason,
     additionalContext: String? = null
 ) {
-    val fullUserReport = FullUserReport(
-        content = UserReport(
-            type = "User",
-            report_reason = reason,
-            id = userId
-        ),
-        additional_context = additionalContext
-    )
-
-    val response = StoatHttp.post("/safety/report".api()) {
-        setBody(
-            StoatJson.encodeToString(
-                FullUserReport.serializer(),
-                fullUserReport
-            )
-        )
-    }
-        .bodyAsText()
-
-    try {
-        val error = StoatJson.decodeFromString(StoatAPIError.serializer(), response)
-        throw Error(error.type)
-    } catch (e: SerializationException) {
-        // Not an error
-    }
+    Log.w("Safety", "User report not supported on Discord yet: $userId ($reason)")
 }

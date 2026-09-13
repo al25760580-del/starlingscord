@@ -1,19 +1,11 @@
 package chat.stoat.api.routes.sync
 
-import chat.stoat.api.StoatHttp
-import chat.stoat.api.StoatJson
-import chat.stoat.api.api
 import chat.stoat.core.model.schemas.ChannelUnreadResponse
-import io.ktor.client.request.get
-import io.ktor.client.statement.bodyAsText
-import kotlinx.serialization.builtins.ListSerializer
 
+/**
+ * Discord maintains read states server-side (ack'd via /ack and the gateway);
+ * there is no bulk unread sync to fetch.
+ */
 suspend fun syncUnreads(): List<ChannelUnreadResponse> {
-    val response = StoatHttp.get("/sync/unreads".api())
-        .bodyAsText()
-
-    return StoatJson.decodeFromString(
-        ListSerializer(ChannelUnreadResponse.serializer()),
-        response
-    )
+    return emptyList()
 }

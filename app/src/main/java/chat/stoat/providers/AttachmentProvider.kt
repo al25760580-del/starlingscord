@@ -5,7 +5,7 @@ import android.net.Uri
 import androidx.core.content.FileProvider
 import chat.stoat.BuildConfig
 import chat.stoat.R
-import chat.stoat.api.StoatHttp
+import chat.stoat.discord.DiscordHttp
 import io.ktor.client.request.get
 import io.ktor.client.statement.readBytes
 import java.io.File
@@ -23,7 +23,7 @@ suspend fun getAttachmentContentUri(
         attachmentsDir.mkdir()
     }
 
-    val response = StoatHttp.get(resourceUrl)
+    val response = DiscordHttp.get(resourceUrl)
     val file = File(attachmentsDir, "$id-$filename")
     file.writeBytes(response.readBytes())
 

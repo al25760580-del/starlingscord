@@ -4,39 +4,32 @@ import android.util.Log
 import androidx.compose.runtime.mutableStateMapOf
 import chat.stoat.BuildConfig
 import chat.stoat.StoatApplication
-import chat.stoat.api.StoatAPI.initialize
 import chat.stoat.api.internals.ActiveSlowmode
 import chat.stoat.api.internals.Members
+import chat.stoat.api.internals.DiscordMappings
+import chat.stoat.api.realtime.DiscordGateway
 import chat.stoat.api.realtime.DisconnectionState
 import chat.stoat.api.realtime.RealtimeSocket
-import chat.stoat.discord.DiscordAPI
-import chat.stoat.api.routes.account.MFA_TICKET_HEADER_NAME
+import chat.stoat.api.realtime.RealtimeSocketFrames
 import chat.stoat.api.routes.user.fetchSelf
 import chat.stoat.api.unreads.Unreads
-import chat.stoat.core.model.data.STOAT_BASE
-import chat.stoat.core.model.schemas.AutumnResource
 import chat.stoat.core.model.schemas.ChannelType
 import chat.stoat.core.model.schemas.Emoji
 import chat.stoat.core.model.schemas.Message
 import chat.stoat.core.model.schemas.Server
 import chat.stoat.core.model.schemas.User
 import chat.stoat.core.model.util.ChannelVoiceState
+import chat.stoat.discord.DiscordAPI
+import chat.stoat.discord.DiscordHttp
+import chat.stoat.discord.routes.fetchFingerprint
 import chat.stoat.persistence.Database
 import chat.stoat.persistence.SqlStorage
 import com.chuckerteam.chucker.api.ChuckerCollector
 import com.chuckerteam.chucker.api.ChuckerInterceptor
 import com.chuckerteam.chucker.api.RetentionManager
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.okhttp.OkHttp
-import io.ktor.client.plugins.DefaultRequest
-import io.ktor.client.plugins.HttpRequestRetry
-import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.client.plugins.defaultRequest
-import io.ktor.client.plugins.logging.LogLevel
-import io.ktor.client.plugins.logging.Logging
-import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.request.header
-import io.ktor.serialization.kotlinx.json.json
+import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsText
 import io.sentry.Sentry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -59,13 +52,8 @@ import kotlinx.serialization.json.Json
 import logcat.LogPriority
 import logcat.asLog
 import logcat.logcat
-import java.net.SocketException
 import kotlin.time.Duration.Companion.seconds
 import chat.stoat.core.model.schemas.Channel as ChannelSchema
-
-fun String.api(): String {
-    return "$STOAT_BASE$this"
-}
 
 fun buildUserAgent(accessMethod: String = "Ktor"): String {
     return "$accessMethod StoatForAndroid/${BuildConfig.VERSION_NAME} " +
@@ -84,68 +72,12 @@ val StoatCbor = Cbor {
     ignoreUnknownKeys = true
 }
 
-val StoatHttp = HttpClient(OkHttp) {
-    install(DefaultRequest)
-    install(ContentNegotiation) {
-        json(StoatJson)
-    }
-
-    install(WebSockets)
-
-    install(HttpRequestRetry) {
-        retryOnServerErrors(maxRetries = 5)
-        retryOnException(maxRetries = 5)
-
-        modifyRequest { request ->
-            request.headers.append("x-retry-count", retryCount.toString())
-        }
-
-        exponentialDelay()
-    }
-
-    install(Logging) { level = LogLevel.INFO }
-
-    val chuckerCollector = ChuckerCollector(
-        context = StoatApplication.instance,
-        showNotification = true,
-        retentionPeriod = RetentionManager.Period.ONE_DAY
-    )
-
-    val chuckerInterceptor = ChuckerInterceptor.Builder(StoatApplication.instance)
-        .collector(chuckerCollector)
-        .maxContentLength(250_000L)
-        .redactHeaders(StoatAPI.TOKEN_HEADER_NAME, MFA_TICKET_HEADER_NAME)
-        .alwaysReadResponseBody(true)
-        .createShortcut(false)
-        .build()
-
-    engine {
-        addInterceptor { chain ->
-            val request = chain.request().newBuilder()
-                .apply {
-                    if (chain.request().headers[StoatAPI.TOKEN_HEADER_NAME] == null) {
-                        header(StoatAPI.TOKEN_HEADER_NAME, StoatAPI.sessionToken)
-                    }
-                }
-                .build()
-            chain.proceed(request)
-        }
-        addInterceptor(chuckerInterceptor)
-    }
-
-    defaultRequest {
-        url(STOAT_BASE)
-        header("User-Agent", buildUserAgent())
-    }
-}
-
 object StoatAPI {
-    const val TOKEN_HEADER_NAME = "x-session-token"
+    const val TOKEN_HEADER_NAME = "Authorization"
     private const val WS_EVENT_BUFFER_CAPACITY =
         128 // arbitrary -- should be adjusted if too much gets dropped...
     private val INITIAL_RECONNECT_DELAY = 1.seconds
     private val MAX_RECONNECT_DELAY = 30.seconds
-    private val PING_INTERVAL = 30.seconds // Same interval as the web clients (/revolt.js)
 
     val userCache = mutableStateMapOf<String, User>()
     val serverCache = mutableStateMapOf<String, Server>()
@@ -174,49 +106,79 @@ object StoatAPI {
     )
 
     private var socketCoroutine: Job? = null
-    private var pingCoroutine: Job? = null
-
-    private var openForLocalHydration = true
 
     fun setSessionHeader(token: String) {
         sessionToken = token
+        DiscordAPI.setSessionToken(token)
     }
 
     fun setSessionId(id: String) {
         sessionId = id
     }
 
+    /** App-lifetime scope: survives UI composition (unlike
+     *  rememberCoroutineScope / LaunchedEffect, whose cancellation killed
+     *  critical writes like the status-settings PATCH when a sheet closed). */
+    val appScope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+
     suspend fun loginAs(token: String) {
+        // Step-by-step diagnostic trail: if login ever stalls again we need
+        // to know WHICH call hung (live incident: an account flagged by
+        // Discord's "new login detected" security flow left a REST call
+        // hanging forever and the app sat on the login screen silently).
+        val t0 = System.currentTimeMillis()
+        fun elapsed() = "${System.currentTimeMillis() - t0}ms"
+        Log.i("StoatLogin", "loginAs: start")
         setSessionHeader(token)
-        fetchSelf()
-        startSocketOps()
-        unreads.sync()
+        try {
+            Log.i("StoatLogin", "loginAs: fetching self (+profile)…")
+            fetchSelf()
+            Log.i("StoatLogin", "loginAs: self ok (${elapsed()}); REST hydration moves to background")
+            // Guild/DM REST hydration (channels/members/roles/emojis) used to
+            // BLOCK login and took 33s on a flaky network (live logcat) - and
+            // it is redundant with the gateway, which delivers full guilds in
+            // READY/GUILD_CREATE. It now refills caches in the background.
+            appScope.launch {
+                runCatching { DiscordMappings.populateFromRest() }
+                    .onSuccess { Log.i("StoatLogin", "background REST hydration complete") }
+                    .onFailure { Log.w("StoatLogin", "background REST hydration failed: ${it.message}") }
+            }
+            Log.i("StoatLogin", "loginAs: starting socket ops…")
+            startSocketOps()
+            Log.i("StoatLogin", "loginAs: socket ops started (${elapsed()}); syncing unreads…")
+            unreads.sync()
+            Log.i("StoatLogin", "loginAs: COMPLETE (${elapsed()})")
+        } catch (e: Exception) {
+            Log.e("StoatLogin", "loginAs: FAILED at ${elapsed()}: ${e::class.simpleName}: ${e.message}")
+            throw e
+        }
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     suspend fun connectWS() {
-        // In full_backend (Discord) mode the Revolt websocket must never connect:
-        // it would issue Revolt requests and its READY payload would overwrite the
-        // Discord-populated caches, causing "channels/messages from Revolt" and
-        // breaking live updates. Discord drives realtime via DiscordGateway instead.
-        if (DiscordAPI.isActive) return
         socketCoroutine?.cancelAndJoin()
         RealtimeSocket.updateDisconnectionState(DisconnectionState.Reconnecting)
         val token = sessionToken
         socketCoroutine = CoroutineScope(Dispatchers.IO).launch {
             var reconnectDelay = INITIAL_RECONNECT_DELAY
+            var firstConnection = true
             while (isActive && sessionToken == token) {
                 try {
                     withContext(realtimeContext) {
-                        RealtimeSocket.connect(token)
+                        DiscordGateway.connect(token) {
+                            // After a drop, tell listeners to resync (e.g. reload
+                            // the latest messages in the open channel).
+                            if (!firstConnection) {
+                                wsFrameChannel.tryEmit(RealtimeSocketFrames.Reconnected)
+                            }
+                            firstConnection = false
+                        }
                     }
                     reconnectDelay = INITIAL_RECONNECT_DELAY
                 } catch (e: CancellationException) {
                     throw e
-                } catch (e: SocketException) {
-                    logcat { "WebSocket closed: ${e.message}" }
                 } catch (e: Exception) {
-                    logcat(LogPriority.ERROR) { "WebSocket error:\n${e.asLog()}" }
+                    logcat(LogPriority.ERROR) { "Gateway error:\n${e.asLog()}" }
                 }
 
                 if (!isActive || sessionToken != token) break
@@ -238,26 +200,19 @@ object StoatAPI {
 
     private suspend fun startSocketOps() {
         connectWS()
-
-        // Send a ping every roughly PING_INTERVAL else the socket dies
-        pingCoroutine?.cancel()
-        pingCoroutine = CoroutineScope(Dispatchers.IO).launch {
-            while (isActive) {
-                delay(PING_INTERVAL)
-                try {
-                    RealtimeSocket.sendPing()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    logcat(LogPriority.ERROR) { "Failed to ping WebSocket:\n${e.asLog()}" }
-                }
-            }
-        }
     }
 
     suspend fun initialize() {
         if (sessionToken != "") {
             fetchSelf()
+            // The X-Fingerprint header (fetched anonymously via /experiments)
+            // is part of looking like a first-party client; without it Discord
+            // can flag the account as automated.
+            if (DiscordAPI.fingerprint == null) {
+                runCatching {
+                    DiscordHttp.fetchFingerprint()?.also { DiscordAPI.setFingerprint(it) }
+                }
+            }
         }
     }
 
@@ -288,19 +243,20 @@ object StoatAPI {
         unreads.clear()
 
         socketCoroutine?.cancel()
-        pingCoroutine?.cancel()
+
+        DiscordAPI.reset()
 
         clearPersistentCache()
     }
 
     /**
-     * Checks if a session token is valid.
+     * Checks if a session token is valid (against Discord's /users/@me).
      */
     suspend fun checkSessionToken(token: String): Boolean {
         return try {
             setSessionHeader(token)
-            fetchSelf()
-            true
+            val response = DiscordHttp.get("https://discord.com/api/v9/users/@me")
+            response.status.value in 200..299
         } catch (e: Exception) {
             false
         }
@@ -308,83 +264,33 @@ object StoatAPI {
 
     /**
      * Hydrate caches from a local database.
+     *
+     * The persistent cache is a leftover of the previous backend; Discord data
+     * is always fetched fresh from REST + gateway on login, so hydration is a
+     * no-op and the stale tables are cleared.
      */
     fun hydrateFromPersistentCache() {
-        if (!openForLocalHydration) {
-            Log.w("RevoltAPI", "Hydration is closed, but was called")
-            // Stale data is worst case, let's track it even in prod
-            Sentry.captureMessage("Local hydration called twice or after real data was fetched")
-            return
-        }
-
-        val db = Database(SqlStorage.driver)
-
-        val channels = db.channelQueries.selectAll().executeAsList().map {
-            ChannelSchema(
-                id = it.id,
-                channelType = try {
-                    ChannelType.valueOf(it.channelType)
-                } catch (e: Exception) {
-                    null
-                },
-                user = it.userId,
-                name = it.name,
-                owner = it.owner,
-                description = it.description,
-                recipients = selfId?.let { selfId ->
-                    it.userId?.let { u -> listOf(u, selfId) }
-                } ?: it.userId?.let { u -> listOf(u) },
-                icon = AutumnResource(
-                    id = it.iconId,
-                ),
-                server = it.server,
-                lastMessageID = it.lastMessageId,
-                active = it.active == 1L,
-                nsfw = it.nsfw == 1L
-            )
-        }
-        channelCache.clear()
-        channelCache.putAll(channels.associateBy { it.id!! })
-
-        val servers = db.serverQueries.selectAll().executeAsList().map {
-            Server(
-                id = it.id,
-                owner = it.owner,
-                name = it.name,
-                description = it.description,
-                icon = AutumnResource(
-                    id = it.iconId,
-                ),
-                banner = AutumnResource(
-                    id = it.bannerId,
-                ),
-                flags = it.flags,
-                channels = channels
-                    .filter { c -> c.server == it.id }
-                    .filterNot { c -> c.id == null }
-                    .map { c -> c.id!! },
-            )
-        }
-        serverCache.clear()
-        serverCache.putAll(servers.associateBy { it.id!! })
-
-        openForLocalHydration = false
+        clearPersistentCache()
     }
 
     /**
      * Clear the local caching database.
      */
     private fun clearPersistentCache() {
-        val db = Database(SqlStorage.driver)
-        db.serverQueries.clear()
-        db.channelQueries.clear()
+        try {
+            val db = Database(SqlStorage.driver)
+            db.serverQueries.clear()
+            db.channelQueries.clear()
+        } catch (e: Exception) {
+            Log.w("StoatAPI", "Failed to clear persistent cache", e)
+        }
     }
 
     /**
      * Marks database as hydrated (after real data was fetched, for example).
      */
     fun closeHydration() {
-        openForLocalHydration = false
+        // no-op: see [hydrateFromPersistentCache]
     }
 }
 

@@ -21,6 +21,7 @@ import chat.stoat.api.internals.ULID
 import chat.stoat.api.internals.has
 import chat.stoat.api.realtime.RealtimeSocket
 import chat.stoat.api.realtime.RealtimeSocketFrames
+import chat.stoat.discord.routes.triggerTyping
 import chat.stoat.api.realtime.frames.receivable.ChannelDeleteFrame
 import chat.stoat.api.realtime.frames.receivable.ChannelStartTypingFrame
 import chat.stoat.api.realtime.frames.receivable.ChannelStopTypingFrame
@@ -42,9 +43,11 @@ import chat.stoat.api.routes.server.fetchMember
 import chat.stoat.api.routes.user.addUserIfUnknown
 import chat.stoat.discord.DiscordAPI
 import chat.stoat.discord.DiscordHttp
-import chat.stoat.discord.DiscordToStoat
+import chat.stoat.api.internals.DiscordMappings
 import chat.stoat.discord.routes.fetchChannelMessages
+import chat.stoat.discord.routes.DiscordAttachmentRef
 import chat.stoat.discord.routes.sendDiscordMessage
+import chat.stoat.discord.routes.uploadChannelAttachment
 import chat.stoat.core.discord.models.DiscordMessageReference
 import chat.stoat.api.settings.GeoStateProvider
 import chat.stoat.callbacks.Action
@@ -277,14 +280,11 @@ class ChannelScreenViewModel(
         }
 
         val permission = Roles.permissionFor(channel!!, selfUser, selfMember)
-        // Discord-adapted channels carry no Revolt permission model, so the
-        // Revolt permission bit is always absent. Assume the user can send in
-        // text/DM/announcement channels; voice channels have no text composer.
-        val canSend = if (DiscordAPI.isActive) {
-            channel!!.channelType != ChannelType.VoiceChannel
-        } else {
-            permission has PermissionBit.SendMessage
-        }
+        // Real Discord permission check: SEND_MESSAGES (implicit VIEW_CHANNEL
+        // denial is respected by the calculator). Voice channels have no text
+        // composer at all.
+        val canSend = channel!!.channelType != ChannelType.VoiceChannel &&
+                permission.has(PermissionBit.SendMessage)
 
         val partnerId = ChannelUtils.resolveDMPartner(channel!!)
 
@@ -317,7 +317,7 @@ class ChannelScreenViewModel(
 
         viewModelScope.launch {
             try {
-                RealtimeSocket.beginTyping(targetChannelId)
+                DiscordHttp.triggerTyping(DiscordMappings.idForRequest(targetChannelId))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -343,15 +343,7 @@ class ChannelScreenViewModel(
         if (editingMessage != null) return
         if (targetChannelId == null) return
 
-        viewModelScope.launch {
-            try {
-                RealtimeSocket.endTyping(targetChannelId)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                logcat(LogPriority.ERROR) { "Failed to end typing:\n${e.asLog()}" }
-            }
-        }
+        // Discord has no "stop typing" call; indicators expire server-side.
     }
 
     private suspend fun parseAst(content: String?): State? =
@@ -507,11 +499,7 @@ class ChannelScreenViewModel(
         // Revolt's processOutgoing rewrites `@name#disc` -> `<@uid>` and
         // `:shortcode:` -> unicode, which would corrupt Discord's `<@snowflake>`
         // / `<:name:id>` tokens. Discord expects raw content, so skip it there.
-        val content = if (DiscordAPI.isActive) {
-            draftContent
-        } else {
-            MessageProcessor.processOutgoing(draftContent, channel?.server)
-        }
+        val content = draftContent
         val replyTo = draftReplyTo.toList()
         val returnToLatestBeforeRenderingSend = canLoadNewer
 
@@ -536,42 +524,58 @@ class ChannelScreenViewModel(
                 }
             }
 
-            val attachmentIds = arrayListOf<String>()
             val takenAttachments =
                 this@ChannelScreenViewModel.draftAttachments.take(MAX_ATTACHMENTS_PER_MESSAGE)
             val totalTaken = takenAttachments.size
 
-            if (!DiscordAPI.isActive) {
-                takenAttachments.forEachIndexed { index, it ->
+            // Upload the attachments through Discord's cloud upload flow
+            // (POST /channels/{id}/attachments -> PUT to the signed GCS
+            // URL), then reference the uploaded files in the message.
+            val uploadRefs = arrayListOf<DiscordAttachmentRef>()
+            if (takenAttachments.isNotEmpty()) {
+                val channelId = channel?.id
+                if (channelId != null) {
                     try {
-                        val id = uploadToAutumn(
-                            it.file,
-                            if (it.spoiler) "SPOILER_${it.filename}" else it.filename,
-                            "attachments",
-                            ContentType.parse(it.contentType),
-                            onProgress = { current, total ->
-                                attachmentUploadProgress =
-                                    ((current.toFloat() / total.toFloat()) / totalTaken.toFloat()) + (index.toFloat() / totalTaken.toFloat())
-                            }
-                        )
-                        attachmentIds.add(id)
+                        takenAttachments.forEachIndexed { index, attachment ->
+                            uploadRefs.add(
+                                uploadChannelAttachment(
+                                    channelId = channelId,
+                                    file = attachment.file,
+                                    filename = if (attachment.spoiler) {
+                                        "SPOILER_${attachment.filename}"
+                                    } else {
+                                        attachment.filename
+                                    },
+                                ) { written, total ->
+                                    attachmentUploadProgress =
+                                        ((written.toFloat() / total) + index.toFloat()) / totalTaken
+                                }
+                            )
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         Log.e("ChannelScreenViewModel", "Failed to upload attachment", e)
                         attachmentUploadProgress = 0f
                         isSending = false
-                        // TODO show error message
                         return@launch
                     }
                 }
             }
 
             val nonce = ULID.makeNext()
+            // Discord rejects string nonces over 25 chars (live-verified:
+            // 400 NONCE_TYPE_TOO_LONG "Debe tener 25 caracteres o menos"),
+            // and a 26-char ULID is exactly one over. The wire nonce is the
+            // deterministic first 25 chars of the ULID, so both the REST
+            // response and the gateway echo match the pending bubble.
+            val wireNonce = nonce.take(25)
             val prospectiveMessage = Message(
                 id = nonce,
                 channel = channel?.id,
                 author = StoatAPI.selfId,
                 content = content,
-                nonce = nonce,
+                nonce = wireNonce,
                 attachments = listOf(),
                 replies = listOf(),
                 tail = items.firstOrNull()?.let {
@@ -598,7 +602,7 @@ class ChannelScreenViewModel(
             this@ChannelScreenViewModel.draftAttachments.removeAll(takenAttachments)
 
             try {
-                if (DiscordAPI.isActive) {
+                run {
                     // Discord text send: emit the adapted message straight into
                     // Stoat's websocket frame channel so the existing
                     // listenToWsEvents pipeline swaps the prospective message.
@@ -614,22 +618,18 @@ class ChannelScreenViewModel(
                         channelId = channel?.id ?: return@launch,
                         content = content,
                         messageReference = replyReference,
+                        attachments = uploadRefs,
+                        // The nonce is echoed on the REST response AND the
+                        // gateway MESSAGE_CREATE; whichever the UI sees first
+                        // swaps out the prospective (pending) bubble.
+                        nonce = wireNonce,
                     )
                     val adapted =
-                        sent?.let { DiscordToStoat.adaptMessage(it) }?.copy(nonce = nonce)
+                        sent?.let { DiscordMappings.adaptMessage(it) }?.copy(nonce = wireNonce)
                     if (adapted != null) {
                         adapted.id?.let { StoatAPI.messageCache[it] = adapted }
                         StoatAPI.wsFrameChannel.tryEmit(adapted)
                     }
-                } else {
-                    sendMessage(
-                        channelId = channel?.id ?: return@launch,
-                        content = content,
-                        nonce = nonce,
-                        replies = replyTo,
-                        attachments = attachmentIds,
-                        idempotencyKey = ULID.makeNext()
-                    )
                 }
             } catch (e: Exception) {
                 Log.e("ChannelScreenViewModel", "Failed to send message", e)
@@ -654,37 +654,7 @@ class ChannelScreenViewModel(
         nearby: String? = null,
         sort: String? = null,
     ): List<Message> {
-        if (DiscordAPI.isActive) {
-            return fetchDiscordMessages(channelId, amount, before, after)
-        }
-
-        val response = fetchMessagesFromChannel(
-            channelId = channelId,
-            limit = amount,
-            includeUsers = true,
-            before = before,
-            after = after,
-            nearby = nearby,
-            sort = sort,
-        )
-
-        response.users.orEmpty().forEach { user ->
-            user.id?.let { StoatAPI.userCache.putIfAbsent(it, user) }
-        }
-        response.members.orEmpty().forEach { member ->
-            member.id?.let { id ->
-                if (!StoatAPI.members.hasMember(id.server, id.user)) {
-                    StoatAPI.members.setMember(id.server, member)
-                }
-            }
-        }
-
-        val messages = normalizeByUlid(response.messages.orEmpty()) { it.id }
-        messages.forEach { message ->
-            message.author?.let { addUserIfUnknown(it) }
-            message.id?.let { StoatAPI.messageCache[it] = message }
-        }
-        return messages
+        return fetchDiscordMessages(channelId, amount, before, after)
     }
 
     /**
@@ -707,12 +677,12 @@ class ChannelScreenViewModel(
             before = beforeSnow,
             after = afterSnow,
         )
-        val messages = discordMessages.mapNotNull { DiscordToStoat.adaptMessage(it) }
+        val messages = discordMessages.mapNotNull { DiscordMappings.adaptMessage(it) }
         discordMessages.forEach { dm ->
             dm.author?.id?.let { aid ->
-                StoatAPI.userCache.putIfAbsent(aid, DiscordToStoat.adaptUser(dm.author) ?: return@let)
+                StoatAPI.userCache.putIfAbsent(aid, DiscordMappings.adaptUser(dm.author) ?: return@let)
             }
-            dm.member?.let { DiscordToStoat.cacheMemberUser(it) }
+            dm.member?.let { DiscordMappings.cacheMemberUser(it) }
         }
         messages.forEach { m -> m.id?.let { StoatAPI.messageCache[it] = m } }
         return messages
@@ -978,9 +948,16 @@ class ChannelScreenViewModel(
     private suspend fun listenToWsEvents() {
         StoatAPI.wsFrameChannel.onEach {
             try {
+                Log.d("ChannelScreen", "WS frame: ${it::class.simpleName}")
                 when (it) {
                     is MessageFrame -> {
-                        if (it.channel != channel?.id) return@onEach
+                        if (it.channel != channel?.id) {
+                            Log.d(
+                                "ChannelScreen",
+                                "MessageFrame for other channel (${it.channel} != ${channel?.id}); dropped",
+                            )
+                            return@onEach
+                        }
                         it.author?.let(::clearTypingUser)
 
                         // If we already have the message we are just catching up on the WebSocket connection. Skip
@@ -989,6 +966,20 @@ class ChannelScreenViewModel(
 
                         if (canLoadNewer) {
                             hasUnseenNewMessages = true
+                            // Still swap out the optimistic pending bubble:
+                            // the confirmed message is now in messageCache and
+                            // will be inserted when the user returns to the
+                            // live tail; leaving the pending copy up makes
+                            // own sends look stuck forever.
+                            if (it.nonce != null) {
+                                updateItems(items.filter { m ->
+                                    if (m is ChannelScreenItem.ProspectiveMessage) {
+                                        m.message.nonce != it.nonce
+                                    } else {
+                                        true
+                                    }
+                                })
+                            }
                             return@onEach
                         }
 
@@ -999,7 +990,7 @@ class ChannelScreenViewModel(
                             }
                             updateItems(listOf(newItem) + items.filter { m ->
                                 if (m is ChannelScreenItem.ProspectiveMessage) {
-                                    m.message.id != it.nonce
+                                    m.message.nonce != it.nonce
                                 } else {
                                     true
                                 }
@@ -1010,7 +1001,14 @@ class ChannelScreenViewModel(
                     }
 
                     is MessageDeleteFrame -> {
-                        if (it.channel != channel?.id) return@onEach
+                        if (it.channel != channel?.id) {
+                            Log.d(
+                                "ChannelScreen",
+                                "MessageDeleteFrame for other channel (${it.channel} != ${channel?.id}); dropped",
+                            )
+                            return@onEach
+                        }
+                        Log.d("ChannelScreen", "removing deleted message ${it.id}")
 
                         val newRenderableMessages =
                             items.filter { m ->
@@ -1085,7 +1083,10 @@ class ChannelScreenViewModel(
                                 msg.message.id == it.id
                             }
 
-                        if (!hasMessage) return@onEach
+                        if (!hasMessage) {
+                            Log.d("ChannelScreen", "MessageReactFrame for unrendered message ${it.id}; skipped")
+                            return@onEach
+                        }
 
                         updateItems(
                             items.map { currentMsg ->

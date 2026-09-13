@@ -1477,6 +1477,7 @@ fun ChannelScreen(
                                                             .navigationBarsPadding()
                                                     ) {
                                                         EmojiPicker(
+                                                            serverId = viewModel.channel?.server,
                                                             onEmojiSelected = viewModel::putAtCursorPosition,
                                                             bottomInset = pxAsDp(
                                                                 max(
@@ -1539,6 +1540,7 @@ fun ChannelScreen(
                                                 .navigationBarsPadding()
                                         ) {
                                             EmojiPicker(
+                                                serverId = viewModel.channel?.server,
                                                 onEmojiSelected = viewModel::putAtCursorPosition,
                                                 bottomInset = pxAsDp(
                                                     max(
