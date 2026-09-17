@@ -6,7 +6,6 @@ import chat.stoat.BuildConfig
 import chat.stoat.StoatApplication
 import chat.stoat.api.internals.ActiveSlowmode
 import chat.stoat.api.internals.Members
-import chat.stoat.api.internals.DiscordMappings
 import chat.stoat.api.realtime.DiscordGateway
 import chat.stoat.api.realtime.DisconnectionState
 import chat.stoat.api.realtime.RealtimeSocket
@@ -133,16 +132,12 @@ object StoatAPI {
         try {
             Log.i("StoatLogin", "loginAs: fetching self (+profile)…")
             fetchSelf()
-            Log.i("StoatLogin", "loginAs: self ok (${elapsed()}); REST hydration moves to background")
-            // Guild/DM REST hydration (channels/members/roles/emojis) used to
-            // BLOCK login and took 33s on a flaky network (live logcat) - and
-            // it is redundant with the gateway, which delivers full guilds in
-            // READY/GUILD_CREATE. It now refills caches in the background.
-            appScope.launch {
-                runCatching { DiscordMappings.populateFromRest() }
-                    .onSuccess { Log.i("StoatLogin", "background REST hydration complete") }
-                    .onFailure { Log.w("StoatLogin", "background REST hydration failed: ${it.message}") }
-            }
+            Log.i("StoatLogin", "loginAs: self ok (${elapsed()}); gateway READY will populate the caches")
+            // No bulk REST hydration anymore: the user-session READY payload
+            // carries full guilds (channels/roles/emojis) + merged_members
+            // (self member) + DMs, so populateFromReady fills every cache
+            // with ZERO requests. Per-server fallbacks (channels/emojis) are
+            // fetched on demand when the user opens them.
             Log.i("StoatLogin", "loginAs: starting socket ops…")
             startSocketOps()
             Log.i("StoatLogin", "loginAs: socket ops started (${elapsed()}); syncing unreads…")

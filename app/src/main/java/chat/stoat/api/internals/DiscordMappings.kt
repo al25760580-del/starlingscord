@@ -209,7 +209,12 @@ object DiscordMappings {
      * already-cached ones, so a flaky REST/gateway fetch can never wipe out
      * channels that were already being shown.
      */
-    fun upsertServer(gid: String, guild: DiscordGuild, rawChannels: List<DiscordChannel>) {
+    fun upsertServer(gid: String, guild: DiscordGuild, channels: List<DiscordChannel>) {
+        // Gateway payloads (READY/GUILD_CREATE) omit guild_id on channels (it
+        // is implied by context) while REST responses include it - stamp it so
+        // adaptChannel's `server` field, the drawer grouping and the
+        // on-demand hydration checks all work for gateway-cached channels.
+        val rawChannels = channels.map { if (it.guildId == null) it.copy(guildId = gid) else it }
         val listable = rawChannels.filter { isListableChannel(it.type) }
         // Keep the raw channel objects (with permission overwrites) around for
         // the permission calculator.
@@ -606,60 +611,88 @@ object DiscordMappings {
 
     /**
      * Populates [StoatAPI] caches from a Discord gateway READY event so that all
-     * existing screens render Discord data. Channels are fetched per guild via
-     * REST because the READY guild objects are reduced (no channels).
+     * existing screens render Discord data - with ZERO REST calls: the
+     * user-session READY guild objects are FULL payloads (channels, roles,
+     * emojis, stickers, threads - verified against a real capture), and the
+     * self member rides in merged_members (index-aligned with guilds). The
+     * previous version fired ~4 REST calls per guild (channels/member/roles/
+     * emojis = ~60 requests for 21 guilds) for data the gateway had already
+     * delivered.
      */
     suspend fun populateFromReady(ready: GatewayReady) {
         val self = ready.user ?: return
         StoatAPI.selfId = self.id
         self.id?.let { StoatAPI.userCache[it] = adaptUser(self) ?: return@let }
 
-        ready.guilds?.forEach { guild ->
-            val gid = guild.id ?: return@forEach
-            val channels = runCatching { DiscordHttp.fetchGuildChannels(gid) }
-                .getOrElse { emptyList() }
-            upsertServer(gid, guild, channels)
-            hydrateSelfMember(gid)
+        val merged = ready.mergedMembers.orEmpty()
+        val guilds = ready.guilds.orEmpty()
+        var channels = 0
+        var emojis = 0
+        guilds.forEachIndexed { i, guild ->
+            val gid = guild.id ?: return@forEachIndexed
+            DiscordAPI.guildCache[gid] = guild
+            // Self member (roles/nick) for permission + visibility filters.
+            merged.getOrNull(i)?.firstOrNull()?.let { selfMember ->
+                DiscordAPI.selfMembers[gid] = selfMember
+                adaptMember(gid, selfMember)?.let { adapted ->
+                    if (adapted.id != null) StoatAPI.members.setMember(gid, adapted)
+                }
+            }
+            upsertServer(gid, guild, guild.channels ?: emptyList())
+            channels += guild.channels?.size ?: 0
             hydrateGuildRoles(gid, guild.roles)
-            runCatching { DiscordHttp.fetchGuildEmojis(gid) }
-                .getOrElse { emptyList() }
-                .forEach { e -> e.id?.let { DiscordAPI.emojiCache[it] = e } }
+            guild.emojis?.forEach { e ->
+                e.id?.let { eid ->
+                    DiscordAPI.emojiCache[eid] = e.copy(guildId = gid)
+                    emojis++
+                }
+            }
         }
-
         ready.privateChannels?.forEach { ch ->
             ch.id?.let { StoatAPI.channelCache[it] = adaptChannel(ch) }
+        }
+        Log.i(
+            "DiscordMappings",
+            "populateFromReady: ${guilds.size} servers, $channels channels, " +
+                "$emojis emojis from the payload (REST-free)",
+        )
+    }
+
+    /**
+     * On-demand fallback for a single server, called when the user opens its
+     * channel list: if the gateway payload didn't include this guild's
+     * channels (e.g. a RESUME that replayed nothing), fetch just this guild.
+     * Does nothing while the cache is already populated.
+     */
+    suspend fun ensureServerHydrated(gid: String) {
+        val guild = DiscordAPI.guildCache[gid] ?: return
+        val hasChannels = StoatAPI.channelCache.values.any { it.server == gid }
+        if (!hasChannels) {
+            val channels = runCatching { DiscordHttp.fetchGuildChannels(gid) }
+                .getOrElse { emptyList() }
+            if (channels.isNotEmpty()) {
+                upsertServer(gid, guild, channels)
+                Log.i("DiscordMappings", "ensureServerHydrated($gid): +${channels.size} channels (on demand)")
+            }
+        }
+        if (DiscordAPI.selfMembers[gid] == null) {
+            hydrateSelfMember(gid)
         }
     }
 
     /**
-     * Seeds the caches from REST endpoints so the UI has servers, DMs and
-     * channels immediately, independent of the gateway. The reduced guild
-     * objects from `/users/@me/guilds` lack description and banner; those
-     * arrive later via gateway `GUILD_CREATE`, which delivers the full object.
+     * On-demand emoji fetch for the picker: only when this guild has none
+     * cached (READY/GUILD_CREATE usually deliver them with the payload).
      */
-    suspend fun populateFromRest() {
-        runCatching {
-            DiscordHttp.fetchGuilds().forEach { guild ->
-                val gid = guild.id ?: return@forEach
-                DiscordAPI.guildCache[gid] = guild
-                val channels = runCatching { DiscordHttp.fetchGuildChannels(gid) }
-                    .getOrElse { emptyList() }
-                upsertServer(gid, guild, channels)
-                hydrateSelfMember(gid)
-                hydrateGuildRoles(gid, guild.roles)
-                runCatching { DiscordHttp.fetchGuildEmojis(gid) }
-                    .getOrElse { emptyList() }
-                    .forEach { e -> e.id?.let { DiscordAPI.emojiCache[it] = e } }
+    suspend fun ensureGuildEmojis(gid: String) {
+        val known = DiscordAPI.emojiCache.values.any { it.guildId == gid }
+        if (known) return
+        runCatching { DiscordHttp.fetchGuildEmojis(gid) }
+            .getOrElse { emptyList() }
+            .forEach { e ->
+                e.id?.let { eid -> DiscordAPI.emojiCache[eid] = e.copy(guildId = gid) }
             }
-            DiscordHttp.fetchDMs().forEach { ch ->
-                ch.id?.let { cid ->
-                    DiscordAPI.dmCache[cid] = ch
-                    StoatAPI.channelCache[cid] = adaptChannel(ch)
-                }
-            }
-        }.onFailure {
-            Log.e("DiscordMappings", "populateFromRest failed", it)
-        }
+        Log.i("DiscordMappings", "ensureGuildEmojis($gid): ${DiscordAPI.emojiCache.values.count { it.guildId == gid }} emojis (on demand)")
     }
 
     /**

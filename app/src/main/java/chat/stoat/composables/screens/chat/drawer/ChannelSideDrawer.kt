@@ -78,6 +78,7 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import chat.stoat.R
 import chat.stoat.api.StoatAPI
+import chat.stoat.api.internals.DiscordMappings
 import chat.stoat.api.internals.CategorisedChannelList
 import chat.stoat.api.internals.ChannelUtils
 import chat.stoat.api.internals.DirectMessages
@@ -813,6 +814,13 @@ fun ColumnScope.ServerChannelListRenderer(
     serverId: String
 ) {
     val scope = rememberCoroutineScope()
+
+    // On-demand hydration: if this server's channels didn't come with the
+    // gateway payload (e.g. a RESUME that replayed nothing), fetch just this
+    // guild - no-op while the cache is already populated.
+    LaunchedEffect(serverId) {
+        DiscordMappings.ensureServerHydrated(serverId)
+    }
 
     LazyColumn(
         state = channelListState,

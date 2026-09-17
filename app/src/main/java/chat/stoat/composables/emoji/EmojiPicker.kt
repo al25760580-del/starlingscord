@@ -1,6 +1,7 @@
 package chat.stoat.composables.emoji
 
 import android.util.TypedValue
+import chat.stoat.api.internals.DiscordMappings
 import chat.stoat.discord.DiscordAPI
 import android.view.HapticFeedbackConstants
 import androidx.compose.animation.AnimatedVisibility
@@ -91,6 +92,12 @@ fun EmojiPicker(
     val emojiImpl = remember { EmojiImpl() }
     // Keyed on the emoji cache size so the server sections appear as soon as
     // the guild emojis finish loading, instead of staying frozen empty.
+    // On-demand emojis: READY/GUILD_CREATE usually deliver them with the
+    // guild payload; fetch this guild's set only if none are cached.
+    LaunchedEffect(serverId) {
+        if (serverId != null) DiscordMappings.ensureGuildEmojis(serverId)
+    }
+
     val emojiCacheSize = DiscordAPI.emojiCache.size
     val pickerList = remember(emojiImpl, emojiCacheSize) { emojiImpl.flatPickerList() }
     val servers = remember(emojiImpl, emojiCacheSize) { emojiImpl.serversWithEmotes() }

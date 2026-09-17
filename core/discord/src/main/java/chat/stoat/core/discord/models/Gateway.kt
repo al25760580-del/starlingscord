@@ -38,6 +38,11 @@ data class GatewayReady(
     @SerialName("resume_gateway_url")
     val resumeGatewayUrl: String? = null,
     val application: GatewayApplication? = null,
+    // User-session READY: the current user's member object for each guild,
+    // index-aligned with [guilds] (docs.discord.food: array of arrays of
+    // guild member objects). Replaces a per-guild REST member fetch.
+    @SerialName("merged_members")
+    val mergedMembers: List<List<DiscordMember>>? = null,
 )
 
 @Serializable
