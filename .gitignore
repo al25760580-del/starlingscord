@@ -28,3 +28,4 @@ app/src/main/assets/embedded
 copilot.data.migration*xml
 *.local.*
 core/discord/build/
+.kotlin/

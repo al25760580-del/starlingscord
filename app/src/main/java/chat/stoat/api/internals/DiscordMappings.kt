@@ -678,6 +678,8 @@ object DiscordMappings {
         if (DiscordAPI.selfMembers[gid] == null) {
             hydrateSelfMember(gid)
         }
+        // Same laziness for roles: no-op when the payload carried them.
+        hydrateGuildRoles(gid, DiscordAPI.guildCache[gid]?.roles)
     }
 
     /**
@@ -693,6 +695,47 @@ object DiscordMappings {
                 e.id?.let { eid -> DiscordAPI.emojiCache[eid] = e.copy(guildId = gid) }
             }
         Log.i("DiscordMappings", "ensureGuildEmojis($gid): ${DiscordAPI.emojiCache.values.count { it.guildId == gid }} emojis (on demand)")
+    }
+
+    /**
+     * Merges a reduced REST guild object (what `GET /users/@me/guilds`
+     * returns: name, icon, banner, owner flag, computed base permissions)
+     * into the caches WITHOUT losing the richer gateway payload already
+     * cached from READY: channels/roles/emojis stay, only the identity
+     * fields are filled in.
+     */
+    fun upsertServerIdentity(gid: String, guild: DiscordGuild) {
+        val payload = DiscordAPI.guildCache[gid]
+        val merged = if (payload != null) {
+            guild.copy(
+                channels = payload.channels,
+                members = payload.members,
+                roles = payload.roles,
+                emojis = payload.emojis,
+            )
+        } else {
+            guild
+        }
+        DiscordAPI.guildCache[gid] = merged
+        upsertServer(gid, merged, merged.channels ?: emptyList())
+    }
+
+    /**
+     * ONE light REST call (GET /users/@me/guilds - a single request, not
+     * per-guild) that restores what the user-session READY guild objects
+     * do NOT carry: name, icon, banner and the computed base permissions.
+     * Verified against the real capture (app/src/test/resources/gateway/
+     * ready.json): READY guilds arrive with channels/roles/emojis but no
+     * identity fields, and user sessions get no GUILD_CREATE to fill them
+     * in later - this call is the server rail's name/icon source.
+     */
+    suspend fun hydrateServerIdentities() {
+        val guilds = DiscordHttp.fetchGuilds()
+        guilds.forEach { g -> g.id?.let { upsertServerIdentity(it, g) } }
+        Log.i(
+            "DiscordMappings",
+            "hydrateServerIdentities: ${guilds.size} servers got name/icon (single REST call)",
+        )
     }
 
     /**

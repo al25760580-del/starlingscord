@@ -1,6 +1,7 @@
 package chat.stoat.api.internals
 
 import chat.stoat.api.StoatAPI
+import chat.stoat.core.discord.models.DiscordGuild
 import chat.stoat.core.discord.models.GatewayReady
 import chat.stoat.discord.DiscordAPI
 import java.io.File
@@ -87,5 +88,37 @@ class PopulateFromReadyTest {
         // would need an HTTP client that isn't wired in JVM tests and throw.
         DiscordMappings.ensureServerHydrated("435452901964513291")
         org.junit.Assert.assertEquals(357, StoatAPI.channelCache.values.count { it.server != null })
+    }
+
+    @org.junit.Test
+    fun `reduced REST guild adds identity without losing payload data`() = runBlocking {
+        val ready = parseFixture()
+        DiscordMappings.populateFromReady(ready)
+        val gid = "435452901964513291"
+        val channelsBefore = StoatAPI.channelCache.values.count { it.server == gid }
+        val emojisBefore = DiscordAPI.emojiCache.values.count { it.guildId == gid }
+        org.junit.Assert.assertTrue(channelsBefore > 0)
+
+        // What GET /users/@me/guilds returns: identity only, no channels.
+        val restGuild = DiscordGuild(
+            id = gid,
+            name = "Restored Name",
+            icon = "aabbccdd",
+            owner = true,
+            permissions = "2147483647",
+        )
+        DiscordMappings.upsertServerIdentity(gid, restGuild)
+
+        // Identity restored (this is what the server rail renders).
+        org.junit.Assert.assertEquals("Restored Name", StoatAPI.serverCache[gid]?.name)
+        org.junit.Assert.assertNotNull(StoatAPI.serverCache[gid]?.icon)
+        // Base permissions feed the visibility filter.
+        org.junit.Assert.assertEquals(2147483647L, DiscordAPI.guildPermissions[gid])
+        // Payload data survived the merge.
+        org.junit.Assert.assertEquals(channelsBefore, StoatAPI.channelCache.values.count { it.server == gid })
+        org.junit.Assert.assertEquals(emojisBefore, DiscordAPI.emojiCache.values.count { it.guildId == gid })
+        org.junit.Assert.assertTrue((DiscordAPI.guildCache[gid]?.channels?.size ?: 0) > 0)
+        // Roles from the payload are preserved in the adapted server.
+        org.junit.Assert.assertTrue((StoatAPI.serverCache[gid]?.roles?.size ?: 0) > 0)
     }
 }

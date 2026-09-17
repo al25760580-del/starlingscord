@@ -283,6 +283,13 @@ object DiscordGateway {
                 // Populate the shared caches (servers, channels, users, self)
                 // so every screen renders Discord data.
                 DiscordMappings.populateFromReady(ready)
+                // User-session READY guilds carry channels/roles/emojis but
+                // NOT name/icon (see the real fixture); one light call to
+                // /users/@me/guilds refills the server rail's identity.
+                launch {
+                    runCatching { DiscordMappings.hydrateServerIdentities() }
+                        .onFailure { Log.w("DiscordGateway", "server identity hydration failed: ${it.message}") }
+                }
                 DiscordAPI.connected = true
                 DiscordAPI.connectionError = null
                 RealtimeSocket.updateDisconnectionState(DisconnectionState.Connected)
